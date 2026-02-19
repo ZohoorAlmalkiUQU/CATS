@@ -63,16 +63,23 @@ It is implemented independently of the embedding backbone and can be compared ag
 
 ---
 
-### 3. Adaptive Spiking Neuron Models
+### 3. Adaptive Spiking Neuron Dynamics
 
-The spiking layer constitutes the actual encoder, transforming routed embeddings into temporal spike patterns.
+The spiking layer constitutes the core of the encoder, transforming routed embeddings into temporal spike patterns.
 
-CATS supports:
+All neurons follow a unified Leaky Integrate-and-Fire (LIF) formulation to maintain architectural consistency and controlled experimentation.
 
-* **Fixed spiking neurons** (e.g., standard LIF)
-* **Adaptive / learnable neurons** (e.g., AdEx, adaptive thresholds, learnable time constants)
+Rather than introducing multiple neuron model families, CATS isolates the effect of learnable intrinsic parameters within a unified LIF formulation to ensure controlled and interpretable experimentation.
 
-This separation allows controlled comparison between static and adaptive spike dynamics.
+The framework supports:
+
+Fixed-parameter LIF (static intrinsic dynamics)
+
+Learnable/adaptive-parameter LIF (e.g., learnable τ, adaptive thresholds, learnable inhibitory strength)
+
+This design enables controlled comparison between static and adaptive spike dynamics within a single neuron model class, avoiding confounding effects from changing neuron formulations.
+
+Note: Alternative neuron models (e.g., AdEx) are maintained only for extensibility and are not part of the primary experimental scope.
 
 ---
 
@@ -99,7 +106,7 @@ CATS/
 │       │   │   └── inhibitory.py
 │       │   └── spiking/
 │       │       ├── lif.py
-│       │       └── adex.py
+│       │       └── adex.py # Optional / future extension
 │       │
 │       └── backbones/
 │           └── transformer.py
@@ -150,11 +157,9 @@ This separation ensures fair evaluation and avoids confounding architectural fac
 
 CATS is built to support systematic experimentation, including:
 
-* No routing vs routing-guided encoding
-* Structured vs non-structured routing
-* Fixed vs adaptive spiking neurons
-* Different routing variants (CARSON vs gating baselines)
-* Different spiking neuron models (LIF vs AdEx)
+* Fixed vs learnable/adaptive LIF parameters
+* CARSON vs routing baselines
+* No routing vs structured routing
 
 Configurations are defined under `configs/`, enabling reproducible research workflows.
 
