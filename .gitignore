@@ -1,0 +1,85 @@
+# ==============================
+# Python
+# ==============================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# ==============================
+# Build / Distribution
+# ==============================
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+
+# ==============================
+# Virtual Environments
+# ==============================
+.venv/
+venv/
+env/
+ENV/
+
+# ==============================
+# Jupyter
+# ==============================
+.ipynb_checkpoints/
+
+# ==============================
+# Logs & Runtime Files
+# ==============================
+*.log
+logs/
+wandb/
+tensorboard/
+runs/
+
+# ==============================
+# Training Outputs
+# ==============================
+checkpoints/
+outputs/
+# experiments/
+*.ckpt
+*.pt
+*.pth
+
+# ==============================
+# Data (Optional – if datasets are large)
+# ==============================
+data/
+datasets/
+*.csv
+*.tsv
+*.jsonl
+*.arrow
+*.parquet
+
+# ==============================
+# IDE / Editor
+# ==============================
+.vscode/
+.idea/
+
+# ==============================
+# macOS
+# ==============================
+.DS_Store
+
+# ==============================
+# Testing / Coverage
+# ==============================
+.coverage
+htmlcov/
+.pytest_cache/
+
+# ==============================
+# Environment Files
+# ==============================
+.env
+.env.*
