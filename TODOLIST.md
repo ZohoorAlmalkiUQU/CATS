@@ -8,40 +8,6 @@ The goal of this task is to **verify that the end-to-end pipeline works**, witho
 
 ---
 
-## Milestone 1 — Data & Representation
-
-```text
-SST-2 text
-→ pretrained Transformer
-→ saved embeddings
-```
-
-Focus:
-
-* Load SST-2
-* Tokenize sentences
-* Extract embeddings using `bert-base-uncased`
-* Save embeddings + attention masks + labels
-
----
-
-## Milestone 2 — End-to-End Baseline
-
-```text
-saved embeddings
-→ simple encoder (identity / minimal)
-→ classifier
-```
-
-Focus:
-
-* Load saved embeddings
-* Implement a minimal encoder (or identity)
-* Train a basic classifier
-* Verify the full pipeline runs correctly
-
----
-
 ## Goal of Task 1
 
 ```text
@@ -125,9 +91,8 @@ CATS/
 
 Before coding CATS itself, we need the **data pipeline** to be correct.
 
-So the first milestone is only this:
 
-## Milestone 1
+## Milestone 1 — Data & Representation
 
 * download SST-2
 * inspect splits
@@ -275,10 +240,23 @@ The attention mask will be useful later for routing and spiking.
 
 ---
 
-## Milestone 2
+## Milestone 2 — End-to-End Baseline
 
+```text
+saved embeddings
+→ simple encoder (identity / minimal)
+→ classifier
+```
+
+Focus:
+
+* Load saved embeddings
+* Implement a minimal encoder (or identity)
+* Train a basic classifier
+* Verify the full pipeline runs correctly
 
 ---
+
 # Task 2
 
 ```text
