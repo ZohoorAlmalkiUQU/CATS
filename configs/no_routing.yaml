@@ -1,0 +1,5 @@
+inherits_from: configs/base.yaml
+
+model:
+  routing_type: identity
+  head_type: linear

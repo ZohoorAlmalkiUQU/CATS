@@ -242,18 +242,123 @@ The attention mask will be useful later for routing and spiking.
 
 ## Milestone 2 — End-to-End Baseline
 
+For **Milestone 2**, our goal is not real CATS routing yet. The objective is to verify that the baseline end-to-end pipeline works correctly using precomputed transformer embeddings.
+
 ```text
-saved embeddings
-→ simple encoder (identity / minimal)
+saved token embeddings
+→ minimal encoder / identity router
+→ pooling
 → classifier
+→ train / evaluate
 ```
 
-Focus:
+So the files to focus on now are:
 
-* Load saved embeddings
-* Implement a minimal encoder (or identity)
-* Train a basic classifier
-* Verify the full pipeline runs correctly
+```text
+src/cats/encoder/core.py
+src/cats/encoder/routing/base.py
+src/cats/encoder/routing/identity.py
+src/cats/heads/classifier.py
+scripts/train_baseline.py
+scripts/evaluate.py
+configs/base.yaml
+configs/no_routing.yaml
+```
+
+### What “verify full pipeline runs correctly” really means
+
+For this milestone, success is not about best accuracy.
+Success means all of these are true:
+
+* train/val/test `.pt` files load correctly
+* embedding and attention-mask dimensions are consistent
+* labels align with samples where labels are available
+* dataloader returns expected batch shapes
+* forward pass works
+* loss decreases at least somewhat
+* validation accuracy is above random
+* test split is handled correctly, including inference-only cases with invalid or missing labels
+* checkpoint save/load works
+
+That is the real milestone objective.
+
+---
+
+### Suggested implementation order
+
+Do it in this exact order.
+
+#### Step 1
+
+Finish `dataset.py`
+
+* load `.pt`
+* return sample dictionaries containing:
+
+  * `embedding`
+  * `attention_mask`
+  * `label` when available
+
+#### Step 2
+
+Finish `collate.py`
+
+* stack token embeddings into `[B, T, D]`
+* stack attention masks into `[B, T]`
+* stack labels into `[B]` when available
+
+#### Step 3
+
+Implement `identity.py`
+
+* pure pass-through router
+
+#### Step 4
+
+Implement `core.py`
+
+* wrapper around router
+* include pooling to convert token-level representations into sentence-level representations
+
+#### Step 5
+
+Implement `classifier.py`
+
+* one linear layer first
+
+#### Step 6
+
+Implement `train_baseline.py`
+
+* train loop
+* validation loop
+* checkpoint saving
+
+#### Step 7
+
+Implement `evaluate.py`
+
+* load checkpoint
+* evaluate on labeled splits
+* handle inference-only test splits gracefully
+
+---
+
+### Strong recommendation about naming
+
+To keep the repo clean and future-proof:
+
+* `IdentityRouter` = baseline no-routing placeholder
+* `CATSEncoder` = generic encoder wrapper
+* `ClassifierHead` = generic classification head
+* `BaselineModel` = Milestone 2 combined model
+
+This will scale nicely when we later add:
+
+* `LinearRouter`
+* spiking population encoding
+* LIF dynamics
+* full `train.py`
 
 ---
 

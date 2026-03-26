@@ -1,0 +1,20 @@
+seed: 42
+
+data:
+  dataset_name: sst2
+  train_path: data/processed/sst2/train.pt
+  val_path: data/processed/sst2/validation.pt
+  test_path: data/processed/sst2/test.pt
+
+training:
+  batch_size: 64
+  epochs: 10
+  lr: 0.001
+  weight_decay: 0.00001
+  save_dir: checkpoints
+
+model:
+  input_dim: 768
+  num_classes: 2
+
+device: cuda
