@@ -2,18 +2,62 @@
 
 # Task 1
 
-We’ll use **HuggingFace SST-2** and keep the **same project skeleton** as the foundation.
+We will use **HuggingFace SST-2** and keep the **same project skeleton** as the foundation.
 
-So from now on, the working path is:
+The goal of this task is to **verify that the end-to-end pipeline works**, without introducing CATS yet.
+
+---
+
+## Milestone 1 — Data & Representation
 
 ```text
 SST-2 text
 → pretrained Transformer
 → saved embeddings
-→ CATS encoder
-→ classifier
-→ experiments
 ```
+
+Focus:
+
+* Load SST-2
+* Tokenize sentences
+* Extract embeddings using `bert-base-uncased`
+* Save embeddings + attention masks + labels
+
+---
+
+## Milestone 2 — End-to-End Baseline
+
+```text
+saved embeddings
+→ simple encoder (identity / minimal)
+→ classifier
+```
+
+Focus:
+
+* Load saved embeddings
+* Implement a minimal encoder (or identity)
+* Train a basic classifier
+* Verify the full pipeline runs correctly
+
+---
+
+## Goal of Task 1
+
+```text
+SST-2 text
+→ pretrained Transformer
+→ saved embeddings
+→ simple encoder
+→ classifier
+```
+
+✔ Ensure everything runs end-to-end
+✔ Validate data flow and shapes
+✔ No routing, no spiking yet
+
+---
+
 
 ```
 CATS/
@@ -231,4 +275,19 @@ The attention mask will be useful later for routing and spiking.
 
 ---
 
+## Milestone 2
+
+
+---
 # Task 2
+
+```text
+saved embeddings
+→ CATS encoder (routing + spiking)
+→ classifier
+→ experiments
+```
+
+👉 This is where the real model (CATS) is introduced.
+
+---
