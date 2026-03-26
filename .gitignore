@@ -52,8 +52,12 @@ outputs/
 # ==============================
 # Data (Optional – if datasets are large)
 # ==============================
-data/
-datasets/
+
+data/raw/
+data/processed/
+
+# Optional: ignore large files
+*.pt
 *.csv
 *.tsv
 *.jsonl

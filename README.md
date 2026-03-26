@@ -92,6 +92,7 @@ Routing determines how embedding dimensions or tokens are assigned to these subp
 ---
 
 ## Project Structure
+> This Structure is not complete yet. After I finish the coding, I will update it. As a result, please note that this project skeleton is not entirely accurate. :)
 
 ```
 CATS/
