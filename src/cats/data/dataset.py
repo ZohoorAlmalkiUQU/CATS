@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from bisect import bisect_right
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -13,7 +14,7 @@ class EmbeddingDataset(Dataset):
     Unified dataset for precomputed embeddings saved as one or more .pt shard files.
 
     Supports:
-    - split directory containing many shard_*.pt files
+    - split directory containing many .pt shard files
     - single .pt file path
     - legacy and new saved formats
 
@@ -32,11 +33,36 @@ class EmbeddingDataset(Dataset):
         "shard_index": int,
         "local_index": int,
     }
+
+    Caching behavior:
+    - max_cached_shards = 0  -> no shard caching
+    - max_cached_shards = 1  -> current behavior but implemented as LRU
+    - max_cached_shards > 1  -> multi-shard LRU cache
     """
 
-    def __init__(self, path: str | Path, cache_current_shard: bool = True):
+    def __init__(
+        self,
+        path: str | Path,
+        cache_current_shard: bool = True,
+        max_cached_shards: Optional[int] = None,
+        validate_on_load: bool = False,
+    ):
         self.path = Path(path)
-        self.cache_current_shard = cache_current_shard
+        self.validate_on_load = validate_on_load
+
+        # Backward-compatible behavior:
+        # if max_cached_shards not provided:
+        #   cache_current_shard=True  -> 6
+        #   cache_current_shard=False -> 0
+        if max_cached_shards is None:
+            max_cached_shards = 6 if cache_current_shard else 0
+
+        if not isinstance(max_cached_shards, int) or max_cached_shards < 0:
+            raise ValueError(
+                f"max_cached_shards must be a non-negative integer, got {max_cached_shards}"
+            )
+
+        self.max_cached_shards = max_cached_shards
 
         self.shard_paths = self._resolve_shard_paths(self.path)
         if len(self.shard_paths) == 0:
@@ -48,6 +74,7 @@ class EmbeddingDataset(Dataset):
         running_total = 0
         self.meta: Dict[str, Any] | None = None
 
+        # Metadata pass only: load once to inspect shapes / lengths
         for shard_idx, shard_path in enumerate(self.shard_paths):
             obj = torch.load(shard_path, map_location="cpu", weights_only=False)
             self._validate_required_keys(obj, shard_path)
@@ -69,6 +96,8 @@ class EmbeddingDataset(Dataset):
                     f"Invalid embeddings shape in {shard_path}: {tuple(embeddings.shape)}"
                 )
 
+            self._validate_optional_lengths(obj, num_samples, shard_path)
+
             info = {
                 "path": shard_path,
                 "num_samples": num_samples,
@@ -82,8 +111,8 @@ class EmbeddingDataset(Dataset):
             if self.meta is None:
                 self.meta = info["meta"]
 
-        self._current_shard_idx: Optional[int] = None
-        self._current_shard_data: Optional[Dict[str, Any]] = None
+        # LRU cache: shard_idx -> loaded shard object
+        self._shard_cache: "OrderedDict[int, Dict[str, Any]]" = OrderedDict()
 
     @staticmethod
     def _resolve_shard_paths(path: Path) -> List[Path]:
@@ -103,6 +132,40 @@ class EmbeddingDataset(Dataset):
         for key in required_keys:
             if key not in obj:
                 raise KeyError(f"Missing required key '{key}' in {shard_path}")
+
+    @staticmethod
+    def _validate_optional_lengths(
+        obj: Dict[str, Any],
+        num_samples: int,
+        shard_path: Path,
+    ) -> None:
+        optional_keys = [
+            "labels",
+            "sentences",
+            "paths",
+            "label_names",
+            "speaker_ids",
+            "utterance_numbers",
+            "sample_rates",
+        ]
+
+        for key in optional_keys:
+            if key not in obj or obj[key] is None:
+                continue
+
+            value = obj[key]
+            try:
+                value_len = len(value)
+            except TypeError as e:
+                raise TypeError(
+                    f"Optional field '{key}' in {shard_path} must be indexable and have length"
+                ) from e
+
+            if value_len != num_samples:
+                raise ValueError(
+                    f"Length mismatch for optional field '{key}' in {shard_path}: "
+                    f"expected {num_samples}, got {value_len}"
+                )
 
     @staticmethod
     def _extract_meta(obj: Dict[str, Any]) -> Dict[str, Any]:
@@ -135,17 +198,11 @@ class EmbeddingDataset(Dataset):
         local_idx = global_idx - shard_start
         return shard_idx, local_idx
 
-    def _load_shard(self, shard_idx: int) -> Dict[str, Any]:
-        if (
-            self.cache_current_shard
-            and self._current_shard_idx == shard_idx
-            and self._current_shard_data is not None
-        ):
-            return self._current_shard_data
-
-        shard_path = self._shard_infos[shard_idx]["path"]
-        obj = torch.load(shard_path, map_location="cpu", weights_only=False)
-
+    def _normalize_loaded_shard(
+        self,
+        obj: Dict[str, Any],
+        shard_path: Path,
+    ) -> Dict[str, Any]:
         embeddings = obj["embeddings"]
         attention_mask = obj["attention_mask"]
 
@@ -175,13 +232,44 @@ class EmbeddingDataset(Dataset):
                 f"{embeddings.shape[1]} vs {attention_mask.shape[1]}"
             )
 
+        # Normalize dtypes once at shard load time, not repeatedly per item / per batch
+        if embeddings.dtype != torch.float32:
+            embeddings = embeddings.float()
+
+        if attention_mask.dtype != torch.long:
+            attention_mask = attention_mask.long()
+
+        if self.validate_on_load:
+            if not torch.isfinite(embeddings).all():
+                raise ValueError(f"Embeddings contain NaN or Inf in {shard_path}")
+            if not torch.isfinite(attention_mask.float()).all():
+                raise ValueError(f"Attention mask contains NaN or Inf in {shard_path}")
+
         obj["embeddings"] = embeddings
         obj["attention_mask"] = attention_mask
+        return obj
 
-        if self.cache_current_shard:
-            self._current_shard_idx = shard_idx
-            self._current_shard_data = obj
+    def _add_to_cache(self, shard_idx: int, obj: Dict[str, Any]) -> None:
+        if self.max_cached_shards <= 0:
+            return
 
+        self._shard_cache[shard_idx] = obj
+        self._shard_cache.move_to_end(shard_idx)
+
+        while len(self._shard_cache) > self.max_cached_shards:
+            self._shard_cache.popitem(last=False)
+
+    def _load_shard(self, shard_idx: int) -> Dict[str, Any]:
+        # LRU hit
+        if shard_idx in self._shard_cache:
+            obj = self._shard_cache.pop(shard_idx)
+            self._shard_cache[shard_idx] = obj
+            return obj
+
+        shard_path = self._shard_infos[shard_idx]["path"]
+        obj = torch.load(shard_path, map_location="cpu", weights_only=False)
+        obj = self._normalize_loaded_shard(obj, shard_path)
+        self._add_to_cache(shard_idx, obj)
         return obj
 
     def __getitem__(self, idx: int) -> Dict[str, Any]:
@@ -189,8 +277,8 @@ class EmbeddingDataset(Dataset):
         shard = self._load_shard(shard_idx)
 
         item: Dict[str, Any] = {
-            "embedding": shard["embeddings"][local_idx],             # [T, D]
-            "attention_mask": shard["attention_mask"][local_idx],    # [T]
+            "embedding": shard["embeddings"][local_idx],        # [T, D], already float32
+            "attention_mask": shard["attention_mask"][local_idx],  # [T], already long
             "index": idx,
             "shard_index": shard_idx,
             "local_index": local_idx,
@@ -231,4 +319,6 @@ class EmbeddingDataset(Dataset):
             "split": None if self.meta is None else self.meta["split"],
             "sequence_type": None if self.meta is None else self.meta["sequence_type"],
             "max_length": None if self.meta is None else self.meta["max_length"],
+            "max_cached_shards": self.max_cached_shards,
+            "validate_on_load": self.validate_on_load,
         }

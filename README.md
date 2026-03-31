@@ -1,5 +1,9 @@
 # CATS: Routing-Guided Adaptive Spiking Encoder for Embedding Sequences
 
+<!-- 
+The framework is designed for extensibility at both the routing and neuron-dynamics levels. In addition to interchangeable routing modules, the spiking layer implementation is modular, allowing future work to modify neuron dynamics, choose which parameters are learnable, and introduce alternative adaptive mechanisms.
+ -->
+
 CATS (**C**ontext-**A**ware **T**oken-to-**S**pike) is a research-oriented framework for converting continuous embedding sequences into structured spike-based representations using **routing-guided adaptive spiking encoders**.
 
 The core contribution of CATS is a **modular spiking encoder** that operates on pre-computed embeddings (e.g., from Transformers), rather than on raw inputs.

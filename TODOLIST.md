@@ -6,23 +6,36 @@
 
 ## 🔹 Phase 0 — Foundation
 
-### ☐ Task 1: Verify pipeline works ✅ Done
+### ☐ Task 1: Prepare embedding datasets ✅ Done
 
-* ☐ Load saved embeddings correctly
-* ☐ Build dummy encoder (no routing, no spiking)
-* ☐ Train classifier
-* ☐ Check:
+* ☐ Extract embeddings for all datasets (text, image, audio)
+* ☐ Save embeddings in sharded `.pt` format per split
+* ☐ Implement shard-aware EmbeddingDataset
+* ☐ Implement robust collate function for batching
+* ☐ Validate all saved embeddings:
 
-  * ☐ shapes are consistent
-  * ☐ loss decreases
-  * ☐ accuracy > random
-* ☐ Confirm no bugs (device / dtype / loading)
+  * ☐ shapes are consistent (B, T, D)
+  * ☐ attention masks match sequence length
+  * ☐ labels are valid (or correctly handled for test splits)
+  * ☐ no NaN / Inf values
+* ☐ Test DataLoader:
+
+  * ☐ batching works correctly
+  * ☐ shuffle works across shards
+* ☐ Confirm dataset is encoder-ready
 
 ---
 
 ## 🔹 Phase 1 — Core CATS Architecture
 
 ### ☐ Task 2: No Routing + Spiking ⏺️ Ongoing
+Embeddings
+→ normalization
+→ excitatory / inhibitory spiking groups
+→ LIF dynamics with learnable/adaptive parameters
+→ masked readout
+→ classifier
+```
 
 * ☐ Implement LIF layer
 * ☐ Add normalization before LIF

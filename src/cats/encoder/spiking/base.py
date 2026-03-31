@@ -7,17 +7,17 @@ import torch
 import torch.nn as nn
 
 
-class BaseRouter(nn.Module, ABC):
+class BaseSpikingLayer(nn.Module, ABC):
     """
-    Base interface for routing modules.
+    Abstract base class for spiking layers.
 
-    Input:
+    Expected input:
         x: [B, T, D]
         attention_mask: [B, T] or None
 
-    Output:
-        dict containing at least:
-            - "routed_x": [B, T, D]
+    Expected output:
+        dict with at least:
+            - "spikes": [B, T, D]
     """
 
     @abstractmethod

@@ -13,13 +13,13 @@ def collate_embeddings(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
     {
         "embedding": Tensor[T, D],
         "attention_mask": Tensor[T],
-        "label": Tensor[] or int,          # optional
-        "sentence": str,                   # optional
-        "path": str,                       # optional
-        "label_name": str,                 # optional
-        "speaker_id": str | None,          # optional
-        "utterance_number": int | None,    # optional
-        "sample_rate": int,                # optional
+        "label": Tensor[] or int,               # optional
+        "sentence": str,                        # optional
+        "path": str,                            # optional
+        "label_name": str,                      # optional
+        "speaker_id": str | None,               # optional
+        "utterance_number": int | None,         # optional
+        "sample_rate": int,                     # optional
         "index": int,
         "shard_index": int,
         "local_index": int,
@@ -29,13 +29,13 @@ def collate_embeddings(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
     {
         "embeddings": Tensor[B, T, D],
         "attention_mask": Tensor[B, T],
-        "labels": Tensor[B],               # optional
-        "sentences": list[str],            # optional
-        "paths": list[str],                # optional
-        "label_names": list[str],          # optional
-        "speaker_ids": list[str | None],   # optional
-        "utterance_numbers": list[int | None], # optional
-        "sample_rates": Tensor[B],         # optional
+        "labels": Tensor[B],                    # optional
+        "sentences": list[str],                 # optional
+        "paths": list[str],                     # optional
+        "label_names": list[str],               # optional
+        "speaker_ids": list[str | None],        # optional
+        "utterance_numbers": list[int | None],  # optional
+        "sample_rates": Tensor[B],              # optional
         "indices": Tensor[B],
         "shard_indices": Tensor[B],
         "local_indices": Tensor[B],
@@ -60,9 +60,16 @@ def collate_embeddings(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
             f"{embeddings.shape[:2]} vs {attention_mask.shape[:2]}"
         )
 
+    # Avoid redundant casts if dataset already normalized dtypes
+    if embeddings.dtype != torch.float32:
+        embeddings = embeddings.float()
+
+    if attention_mask.dtype != torch.long:
+        attention_mask = attention_mask.long()
+
     output: Dict[str, Any] = {
-        "embeddings": embeddings.float(),
-        "attention_mask": attention_mask.long(),
+        "embeddings": embeddings,
+        "attention_mask": attention_mask,
         "indices": torch.tensor([item["index"] for item in batch], dtype=torch.long),
         "shard_indices": torch.tensor(
             [item["shard_index"] for item in batch], dtype=torch.long
@@ -76,9 +83,16 @@ def collate_embeddings(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
         labels = []
         for item in batch:
             label = item["label"]
+
             if isinstance(label, torch.Tensor):
-                label = label.item() if label.ndim == 0 else label.squeeze().item()
+                if label.numel() != 1:
+                    raise ValueError(
+                        f"Expected scalar label, got shape {tuple(label.shape)}"
+                    )
+                label = label.item()
+
             labels.append(int(label))
+
         output["labels"] = torch.tensor(labels, dtype=torch.long)
 
     if all("sentence" in item for item in batch):

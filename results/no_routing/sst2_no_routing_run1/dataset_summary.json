@@ -1,0 +1,38 @@
+{
+  "train": {
+    "source_path": "data\\processed\\sst2\\train",
+    "num_shards": 68,
+    "num_samples": 67349,
+    "dataset_name": "sst2",
+    "modality": "text",
+    "backbone": "bert-base-uncased",
+    "num_classes": 2,
+    "split": "train",
+    "sequence_type": "tokens",
+    "max_length": 64
+  },
+  "val": {
+    "source_path": "data\\processed\\sst2\\validation",
+    "num_shards": 1,
+    "num_samples": 872,
+    "dataset_name": "sst2",
+    "modality": "text",
+    "backbone": "bert-base-uncased",
+    "num_classes": 2,
+    "split": "validation",
+    "sequence_type": "tokens",
+    "max_length": 64
+  },
+  "test": {
+    "source_path": "data\\processed\\sst2\\test",
+    "num_shards": 2,
+    "num_samples": 1821,
+    "dataset_name": "sst2",
+    "modality": "text",
+    "backbone": "bert-base-uncased",
+    "num_classes": 2,
+    "split": "test",
+    "sequence_type": "tokens",
+    "max_length": 64
+  }
+}
