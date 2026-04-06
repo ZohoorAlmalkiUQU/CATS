@@ -7,7 +7,7 @@ import json
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -17,24 +17,30 @@ from tqdm.auto import tqdm
 from cats.data.dataset import EmbeddingDataset
 from cats.data.collate import collate_embeddings
 from cats.utils.config import load_config
-from cats.utils.metrics import accuracy_from_logits, binary_f1_from_logits
+from cats.utils.metrics import (
+    accuracy_from_logits,
+    binary_precision_from_logits,
+    binary_recall_from_logits,
+    binary_f1_from_logits,
+    compute_spike_metrics,
+    compute_routing_metrics,
+    compute_prototype_metrics,
+)
 from cats.utils.seed import set_seed
 
 
 # ============================================================
 # Registries
 # ============================================================
-# عدلي المسارات هنا حسب أسماء الكلاسات الحقيقية عندك
 MODEL_REGISTRY = {
-    "baseline": "cats.model:CATSNoRoutingClassifier",
-    # "carson": "cats.model:CARSONClassifier",
+    "cats": "cats.model:CATSClassifier",
 }
 
 ROUTER_REGISTRY = {
     "no_routing": "cats.encoder.routing.identity:IdentityRouter",
     "identity": "cats.encoder.routing.identity:IdentityRouter",
-    # "linear": "cats.encoder.routing.linear_router:LinearRouter",
-    # "carson": "cats.encoder.routing.carson:CARSONRouter",
+    "carson_v1": "cats.encoder.routing.carson_v1:CARSONRouterV1",
+    "carson_v2": "cats.encoder.routing.carson_v2:CARSONRouterV2",
 }
 
 
@@ -85,11 +91,37 @@ def save_json(data: Dict[str, Any], path: Path) -> None:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 
+def maybe_cuda_synchronize(device: torch.device) -> None:
+    if device.type == "cuda":
+        torch.cuda.synchronize()
+
+
+def add_selected_metrics_to_postfix(
+    postfix: Dict[str, str],
+    metric_sums: Dict[str, float],
+    num_batches: int,
+    key_map: Dict[str, str],
+    decimals_map: Optional[Dict[str, int]] = None,
+) -> None:
+    if num_batches <= 0:
+        return
+
+    decimals_map = decimals_map or {}
+
+    for original_key, short_name in key_map.items():
+        if original_key in metric_sums:
+            value = metric_sums[original_key] / num_batches
+            decimals = decimals_map.get(original_key, 4)
+            postfix[short_name] = f"{value:.{decimals}f}"
+
+
 class CSVLogger:
     def __init__(self, csv_path: Path) -> None:
         self.csv_path = csv_path
         self.csv_path.parent.mkdir(parents=True, exist_ok=True)
-        self._header_written = self.csv_path.exists() and self.csv_path.stat().st_size > 0
+        self._header_written = (
+            self.csv_path.exists() and self.csv_path.stat().st_size > 0
+        )
 
     def log(self, row: Dict[str, Any]) -> None:
         fieldnames = list(row.keys())
@@ -108,25 +140,6 @@ def resolve_data_paths(
     experiment_cfg: Dict[str, Any],
     data_cfg: Dict[str, Any],
 ) -> Dict[str, Optional[str]]:
-    """
-    Two supported modes:
-
-    1) Automatic by dataset name:
-        processed_root: data/processed
-        dataset_name: sst2
-        train_split: train
-        val_split: val
-        test_split: test
-
-        -> data/processed/sst2/train
-           data/processed/sst2/val
-           data/processed/sst2/test
-
-    2) Explicit override:
-        train_path: ...
-        val_path: ...
-        test_path: ...
-    """
     dataset_name = experiment_cfg["dataset_name"]
 
     processed_root = data_cfg.get("processed_root", "data/processed")
@@ -137,7 +150,9 @@ def resolve_data_paths(
 
     auto_train = str(Path(processed_root) / dataset_name / train_split)
     auto_val = str(Path(processed_root) / dataset_name / val_split)
-    auto_test = str(Path(processed_root) / dataset_name / test_split) if has_test else None
+    auto_test = (
+        str(Path(processed_root) / dataset_name / test_split) if has_test else None
+    )
 
     train_path = data_cfg.get("train_path", auto_train)
     val_path = data_cfg.get("val_path", auto_val)
@@ -160,7 +175,6 @@ def resolve_log_dir(
     routing_type = experiment_cfg["routing_type"]
     run_name = experiment_cfg["run_name"]
 
-    # logs/sst2/baseline/no_routing/run_001/
     return base_dir / dataset_name / model_name / routing_type / run_name
 
 
@@ -174,17 +188,20 @@ def resolve_checkpoint_paths(
     routing_type = experiment_cfg["routing_type"]
     run_name = experiment_cfg["run_name"]
 
-    # checkpoints/sst2/baseline/no_routing/best_run_001.pt
     ckpt_dir = base_dir / dataset_name / model_name / routing_type
     ckpt_dir.mkdir(parents=True, exist_ok=True)
 
-    best_name = checkpoint_cfg.get("best_name_template", "best_{run_name}.pt").format(
+    best_name = checkpoint_cfg.get(
+        "best_name_template", "best_{run_name}.pt"
+    ).format(
         run_name=run_name,
         dataset_name=dataset_name,
         model_name=model_name,
         routing_type=routing_type,
     )
-    latest_name = checkpoint_cfg.get("latest_name_template", "latest_{run_name}.pt").format(
+    latest_name = checkpoint_cfg.get(
+        "latest_name_template", "latest_{run_name}.pt"
+    ).format(
         run_name=run_name,
         dataset_name=dataset_name,
         model_name=model_name,
@@ -244,13 +261,6 @@ def move_batch_to_device(
 # Builders
 # ============================================================
 def build_router(routing_type: str, routing_cfg: Dict[str, Any]) -> nn.Module:
-    """
-    routing_cfg supports:
-      routing:
-        routing_type: no_routing
-        kwargs: {}
-        class_path: cats.encoder.routing.identity:IdentityRouter   # optional override
-    """
     class_path = routing_cfg.get("class_path", None)
     if class_path is None:
         if routing_type not in ROUTER_REGISTRY:
@@ -271,22 +281,6 @@ def build_model(
     lif_cfg: Dict[str, Any],
     router: nn.Module,
 ) -> nn.Module:
-    """
-    model_cfg supports:
-      model:
-        model_name: baseline
-        embedding_dim: 768
-        hidden_dim: 256
-        num_classes: 2
-        excitatory_ratio: 0.5
-        kwargs: {}
-        class_path: cats.model:CATSNoRoutingClassifier   # optional override
-
-    Important:
-    - This assumes your model constructor accepts:
-        embedding_dim, hidden_dim, num_classes, excitatory_ratio, router, lif_config, **kwargs
-    - If one model differs, either adapt here or add model-specific branching.
-    """
     model_name = experiment_cfg["model_name"]
     class_path = model_cfg.get("class_path", None)
     if class_path is None:
@@ -298,7 +292,6 @@ def build_model(
         class_path = MODEL_REGISTRY[model_name]
 
     ModelClass = import_from_string(class_path)
-
     model_kwargs = model_cfg.get("kwargs", {}) or {}
 
     model = ModelClass(
@@ -313,7 +306,10 @@ def build_model(
     return model
 
 
-def build_optimizer(model: nn.Module, training_cfg: Dict[str, Any]) -> torch.optim.Optimizer:
+def build_optimizer(
+    model: nn.Module,
+    training_cfg: Dict[str, Any],
+) -> torch.optim.Optimizer:
     optimizer_name = str(training_cfg.get("optimizer", "adam")).lower()
     lr = float(training_cfg.get("lr", 1e-3))
     weight_decay = float(training_cfg.get("weight_decay", 1e-5))
@@ -324,13 +320,13 @@ def build_optimizer(model: nn.Module, training_cfg: Dict[str, Any]) -> torch.opt
             lr=lr,
             weight_decay=weight_decay,
         )
-    elif optimizer_name == "adamw":
+    if optimizer_name == "adamw":
         return torch.optim.AdamW(
             model.parameters(),
             lr=lr,
             weight_decay=weight_decay,
         )
-    elif optimizer_name == "sgd":
+    if optimizer_name == "sgd":
         momentum = float(training_cfg.get("momentum", 0.9))
         return torch.optim.SGD(
             model.parameters(),
@@ -338,8 +334,269 @@ def build_optimizer(model: nn.Module, training_cfg: Dict[str, Any]) -> torch.opt
             weight_decay=weight_decay,
             momentum=momentum,
         )
-    else:
-        raise ValueError(f"Unsupported optimizer: '{optimizer_name}'")
+
+    raise ValueError(f"Unsupported optimizer: '{optimizer_name}'")
+
+
+# ============================================================
+# Classification metrics
+# ============================================================
+def multiclass_macro_precision_recall_f1_from_logits(
+    logits: torch.Tensor,
+    labels: torch.Tensor,
+    num_classes: int,
+) -> Dict[str, float]:
+    preds = logits.argmax(dim=-1)
+
+    precisions: List[float] = []
+    recalls: List[float] = []
+    f1s: List[float] = []
+
+    for c in range(num_classes):
+        tp = ((preds == c) & (labels == c)).sum().item()
+        fp = ((preds == c) & (labels != c)).sum().item()
+        fn = ((preds != c) & (labels == c)).sum().item()
+
+        precision = tp / (tp + fp + 1e-8)
+        recall = tp / (tp + fn + 1e-8)
+        f1 = 2.0 * precision * recall / (precision + recall + 1e-8)
+
+        precisions.append(float(precision))
+        recalls.append(float(recall))
+        f1s.append(float(f1))
+
+    return {
+        "precision": float(sum(precisions) / len(precisions)),
+        "recall": float(sum(recalls) / len(recalls)),
+        "f1": float(sum(f1s) / len(f1s)),
+    }
+
+
+def compute_classification_metrics_from_logits(
+    logits: torch.Tensor,
+    labels: torch.Tensor,
+    num_classes: int,
+) -> Dict[str, float]:
+    accuracy = float(accuracy_from_logits(logits, labels))
+
+    if num_classes == 2:
+        precision = float(binary_precision_from_logits(logits, labels))
+        recall = float(binary_recall_from_logits(logits, labels))
+        f1 = float(binary_f1_from_logits(logits, labels))
+        return {
+            "accuracy": accuracy,
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+        }
+
+    macro = multiclass_macro_precision_recall_f1_from_logits(
+        logits=logits,
+        labels=labels,
+        num_classes=num_classes,
+    )
+    return {
+        "accuracy": accuracy,
+        "precision": macro["precision"],
+        "recall": macro["recall"],
+        "f1": macro["f1"],
+    }
+
+
+# ============================================================
+# Metric collection helpers
+# ============================================================
+def accumulate_metric_dict(
+    accumulator: Dict[str, float],
+    values: Dict[str, float],
+) -> None:
+    for key, value in values.items():
+        accumulator[key] = accumulator.get(key, 0.0) + float(value)
+
+
+def append_cpu_tensors(
+    storage: List[torch.Tensor],
+    tensor: torch.Tensor,
+) -> None:
+    storage.append(tensor.detach().cpu())
+
+
+def build_postfix_train(
+    total_loss: float,
+    total_samples: int,
+    logits_buffer: List[torch.Tensor],
+    labels_buffer: List[torch.Tensor],
+    num_classes: int,
+    spike_metric_sums: Dict[str, float],
+    routing_metric_sums: Dict[str, float],
+    prototype_metric_sums: Dict[str, float],
+    spike_batches: int,
+    routing_batches: int,
+    prototype_batches: int,
+) -> Dict[str, str]:
+    postfix: Dict[str, str] = {
+        "loss": f"{(total_loss / max(total_samples, 1)):.4f}",
+    }
+
+    if logits_buffer and labels_buffer:
+        logits_all = torch.cat(logits_buffer, dim=0)
+        labels_all = torch.cat(labels_buffer, dim=0)
+        cls_metrics = compute_classification_metrics_from_logits(
+            logits=logits_all,
+            labels=labels_all,
+            num_classes=num_classes,
+        )
+        postfix["acc"] = f"{cls_metrics['accuracy']:.4f}"
+        postfix["f1"] = f"{cls_metrics['f1']:.4f}"
+
+    add_selected_metrics_to_postfix(
+        postfix=postfix,
+        metric_sums=spike_metric_sums,
+        num_batches=spike_batches,
+        key_map={
+            "firing_rate": "spk_rt",
+            "spikes_per_token": "spk_tok",
+            "spikes_per_sample": "spk_smp",
+            "exc_firing_rate": "exc_rt",
+            "inh_firing_rate": "inh_rt",
+            "exc_inh_diff": "exc-inh",
+        },
+        decimals_map={
+            "firing_rate": 4,
+            "spikes_per_token": 2,
+            "spikes_per_sample": 2,
+            "exc_firing_rate": 4,
+            "inh_firing_rate": 4,
+            "exc_inh_diff": 4,
+        },
+    )
+
+    add_selected_metrics_to_postfix(
+        postfix=postfix,
+        metric_sums=routing_metric_sums,
+        num_batches=routing_batches,
+        key_map={
+            "routing_entropy": "H",
+            "routing_conf_mean": "r_conf",
+            "max_weight_mean": "max_w",
+            "dominance_fraction": "dom",
+            "exc_weight_mean": "exc_w",
+            "inh_weight_mean": "inh_w",
+            "exc_usage_fraction": "exc_use",
+            "inh_usage_fraction": "inh_use",
+            "agreement_mean": "agree",
+            "exc_agreement_mean": "exc_ag",
+            "inh_agreement_mean": "inh_ag",
+        },
+        decimals_map={
+            "routing_entropy": 3,
+            "routing_conf_mean": 3,
+            "max_weight_mean": 3,
+            "dominance_fraction": 3,
+            "exc_weight_mean": 3,
+            "inh_weight_mean": 3,
+            "exc_usage_fraction": 3,
+            "inh_usage_fraction": 3,
+            "agreement_mean": 3,
+            "exc_agreement_mean": 3,
+            "inh_agreement_mean": 3,
+        },
+    )
+
+    add_selected_metrics_to_postfix(
+        postfix=postfix,
+        metric_sums=prototype_metric_sums,
+        num_batches=prototype_batches,
+        key_map={
+            "prototype_cosine_sim": "proto_sim",
+            "prototype_cosine_distance": "proto_dist",
+        },
+        decimals_map={
+            "prototype_cosine_sim": 3,
+            "prototype_cosine_distance": 3,
+        },
+    )
+
+    return postfix
+
+
+def build_postfix_val(
+    total_loss: float,
+    total_samples: int,
+    spike_metric_sums: Dict[str, float],
+    routing_metric_sums: Dict[str, float],
+    prototype_metric_sums: Dict[str, float],
+    spike_batches: int,
+    routing_batches: int,
+    prototype_batches: int,
+) -> Dict[str, str]:
+    postfix: Dict[str, str] = {
+        "loss": f"{(total_loss / max(total_samples, 1)):.4f}",
+    }
+
+    add_selected_metrics_to_postfix(
+        postfix=postfix,
+        metric_sums=spike_metric_sums,
+        num_batches=spike_batches,
+        key_map={
+            "firing_rate": "spk_rt",
+            "spikes_per_token": "spk_tok",
+            "spikes_per_sample": "spk_smp",
+            "exc_firing_rate": "exc_rt",
+            "inh_firing_rate": "inh_rt",
+        },
+        decimals_map={
+            "firing_rate": 4,
+            "spikes_per_token": 2,
+            "spikes_per_sample": 2,
+            "exc_firing_rate": 4,
+            "inh_firing_rate": 4,
+        },
+    )
+
+    add_selected_metrics_to_postfix(
+        postfix=postfix,
+        metric_sums=routing_metric_sums,
+        num_batches=routing_batches,
+        key_map={
+            "routing_entropy": "H",
+            "routing_conf_mean": "r_conf",
+            "max_weight_mean": "max_w",
+            "dominance_fraction": "dom",
+            "exc_weight_mean": "exc_w",
+            "inh_weight_mean": "inh_w",
+            "exc_usage_fraction": "exc_use",
+            "inh_usage_fraction": "inh_use",
+            "agreement_mean": "agree",
+        },
+        decimals_map={
+            "routing_entropy": 3,
+            "routing_conf_mean": 3,
+            "max_weight_mean": 3,
+            "dominance_fraction": 3,
+            "exc_weight_mean": 3,
+            "inh_weight_mean": 3,
+            "exc_usage_fraction": 3,
+            "inh_usage_fraction": 3,
+            "agreement_mean": 3,
+        },
+    )
+
+    add_selected_metrics_to_postfix(
+        postfix=postfix,
+        metric_sums=prototype_metric_sums,
+        num_batches=prototype_batches,
+        key_map={
+            "prototype_cosine_sim": "proto_sim",
+            "prototype_cosine_distance": "proto_dist",
+        },
+        decimals_map={
+            "prototype_cosine_sim": 3,
+            "prototype_cosine_distance": 3,
+        },
+    )
+
+    return postfix
 
 
 # ============================================================
@@ -353,31 +610,54 @@ def train_one_epoch(
     device: torch.device,
     epoch: int,
     total_epochs: int,
+    num_classes: int,
+    grad_clip_norm: Optional[float] = None,
 ) -> Dict[str, float]:
     model.train()
 
+    epoch_start = time.perf_counter()
+
     total_loss = 0.0
-    total_correct = 0
     total_samples = 0
+    total_tokens = 0
+
+    total_forward_time = 0.0
+    total_backward_time = 0.0
+    total_step_time = 0.0
+
+    train_logits_cpu: List[torch.Tensor] = []
+    train_labels_cpu: List[torch.Tensor] = []
+
+    spike_metric_sums: Dict[str, float] = {}
+    routing_metric_sums: Dict[str, float] = {}
+    prototype_metric_sums: Dict[str, float] = {}
+
+    spike_batches = 0
+    routing_batches = 0
+    prototype_batches = 0
 
     progress_bar = tqdm(
         loader,
         desc=f"Epoch {epoch}/{total_epochs} [train]",
         leave=False,
-        dynamic_ncols=True,
+        dynamic_ncols=False,
+        ascii=True,
     )
 
-    for batch_idx, batch in enumerate(progress_bar):
-        t0 = time.perf_counter()
-
+    for batch in progress_bar:
         batch = move_batch_to_device(batch, device)
-        t1 = time.perf_counter()
 
         embeddings = batch["embeddings"]
         attention_mask = batch["attention_mask"]
         labels = batch["labels"]
 
+        batch_size = labels.size(0)
+        seq_len = embeddings.size(1)
+
         optimizer.zero_grad(set_to_none=True)
+
+        maybe_cuda_synchronize(device)
+        t1 = time.perf_counter()
 
         outputs = model(
             embeddings=embeddings,
@@ -385,60 +665,119 @@ def train_one_epoch(
         )
         logits = outputs["logits"]
         loss = criterion(logits, labels)
+
+
+        maybe_cuda_synchronize(device)
         t2 = time.perf_counter()
 
         loss.backward()
+
+        if grad_clip_norm is not None and grad_clip_norm > 0.0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
+
+        maybe_cuda_synchronize(device)
         t3 = time.perf_counter()
 
         optimizer.step()
+
+        maybe_cuda_synchronize(device)
         t4 = time.perf_counter()
 
-        batch_size = labels.size(0)
+        total_forward_time += (t2 - t1)
+        total_backward_time += (t3 - t2)
+        total_step_time += (t4 - t3)
+
         total_samples += batch_size
+        total_tokens += batch_size * seq_len
         total_loss += loss.item() * batch_size
 
-        preds = torch.argmax(logits, dim=1)
-        total_correct += (preds == labels).sum().item()
+        append_cpu_tensors(train_logits_cpu, logits)
+        append_cpu_tensors(train_labels_cpu, labels)
 
-        running_loss = total_loss / total_samples
-        running_acc = total_correct / total_samples
+        spikes = outputs.get("spikes", None)
+        if spikes is not None:
+            spike_metrics = compute_spike_metrics(
+                spikes=spikes,
+                attention_mask=attention_mask,
+                group_assignments=outputs.get("group_assignments", None),
+            )
+            accumulate_metric_dict(spike_metric_sums, spike_metrics)
+            spike_batches += 1
 
-        progress_bar.set_postfix(
-            loss=f"{running_loss:.4f}",
-            acc=f"{running_acc:.4f}",
+        routing_weights = outputs.get("routing_weights", None)
+        if routing_weights is not None:
+            routing_metrics = compute_routing_metrics(
+                routing_weights=routing_weights,
+                attention_mask=attention_mask,
+                routing_confidence=outputs.get("routing_confidence", None),
+                agreement=outputs.get("agreement", None),
+            )
+            accumulate_metric_dict(routing_metric_sums, routing_metrics)
+            routing_batches += 1
+
+        group_prototypes = outputs.get("group_prototypes", None)
+        if group_prototypes is not None:
+            prototype_metrics = compute_prototype_metrics(group_prototypes)
+            accumulate_metric_dict(prototype_metric_sums, prototype_metrics)
+            prototype_batches += 1
+
+        postfix = build_postfix_train(
+            total_loss=total_loss,
+            total_samples=total_samples,
+            logits_buffer=train_logits_cpu,
+            labels_buffer=train_labels_cpu,
+            num_classes=num_classes,
+            spike_metric_sums=spike_metric_sums,
+            routing_metric_sums=routing_metric_sums,
+            prototype_metric_sums=prototype_metric_sums,
+            spike_batches=spike_batches,
+            routing_batches=routing_batches,
+            prototype_batches=prototype_batches,
         )
-
-    if batch_idx < 5:
-        print(
-            f"[batch {batch_idx}] "
-            f"to_device={t1-t0:.3f}s | "
-            f"forward={t2-t1:.3f}s | "
-            f"backward={t3-t2:.3f}s | "
-            f"step={t4-t3:.3f}s"
-        )
-
-        batch_size = labels.size(0)
-        total_samples += batch_size
-        total_loss += loss.item() * batch_size
-
-        preds = torch.argmax(logits, dim=1)
-        total_correct += (preds == labels).sum().item()
-
-        running_loss = total_loss / total_samples
-        running_acc = total_correct / total_samples
-
-        progress_bar.set_postfix(
-            loss=f"{running_loss:.4f}",
-            acc=f"{running_acc:.4f}",
-        )
+        progress_bar.set_postfix(postfix)
 
     if total_samples == 0:
         raise ValueError("No samples processed during training epoch.")
 
-    return {
+    epoch_time = time.perf_counter() - epoch_start
+    samples_per_sec = total_samples / max(epoch_time, 1e-8)
+    tokens_per_sec = total_tokens / max(epoch_time, 1e-8)
+
+    logits_all = torch.cat(train_logits_cpu, dim=0)
+    labels_all = torch.cat(train_labels_cpu, dim=0)
+    cls_metrics = compute_classification_metrics_from_logits(
+        logits=logits_all,
+        labels=labels_all,
+        num_classes=num_classes,
+    )
+
+    metrics: Dict[str, float] = {
         "loss": total_loss / total_samples,
-        "accuracy": total_correct / total_samples,
+        "accuracy": cls_metrics["accuracy"],
+        "precision": cls_metrics["precision"],
+        "recall": cls_metrics["recall"],
+        "f1": cls_metrics["f1"],
+        "epoch_time_sec": epoch_time,
+        "forward_time_sec": total_forward_time,
+        "backward_time_sec": total_backward_time,
+        "step_time_sec": total_step_time,
+        "samples_per_sec": samples_per_sec,
+        "tokens_per_sec": tokens_per_sec,
     }
+
+    if spike_batches > 0:
+        for key, value in spike_metric_sums.items():
+            metrics[f"train_{key}"] = value / spike_batches
+
+    if routing_batches > 0:
+        for key, value in routing_metric_sums.items():
+            metrics[f"train_{key}"] = value / routing_batches
+
+    if prototype_batches > 0:
+        for key, value in prototype_metric_sums.items():
+            metrics[f"train_{key}"] = value / prototype_batches
+
+    return metrics
 
 
 @torch.no_grad()
@@ -453,16 +792,29 @@ def validate_one_epoch(
 ) -> Dict[str, float]:
     model.eval()
 
+    epoch_start = time.perf_counter()
+
     total_loss = 0.0
     total_samples = 0
-    all_logits = []
-    all_labels = []
+    total_tokens = 0
+
+    val_logits_cpu: List[torch.Tensor] = []
+    val_labels_cpu: List[torch.Tensor] = []
+
+    spike_metric_sums: Dict[str, float] = {}
+    routing_metric_sums: Dict[str, float] = {}
+    prototype_metric_sums: Dict[str, float] = {}
+
+    spike_batches = 0
+    routing_batches = 0
+    prototype_batches = 0
 
     progress_bar = tqdm(
         loader,
         desc=f"Epoch {epoch}/{total_epochs} [val]",
         leave=False,
-        dynamic_ncols=True,
+        dynamic_ncols=False,
+        ascii=True,
     )
 
     for batch in progress_bar:
@@ -480,29 +832,93 @@ def validate_one_epoch(
         loss = criterion(logits, labels)
 
         batch_size = labels.size(0)
+        seq_len = embeddings.size(1)
+
         total_samples += batch_size
+        total_tokens += batch_size * seq_len
         total_loss += loss.item() * batch_size
 
-        all_logits.append(logits.detach().cpu())
-        all_labels.append(labels.detach().cpu())
+        append_cpu_tensors(val_logits_cpu, logits)
+        append_cpu_tensors(val_labels_cpu, labels)
 
-        running_loss = total_loss / total_samples
-        progress_bar.set_postfix(loss=f"{running_loss:.4f}")
+        spikes = outputs.get("spikes", None)
+        if spikes is not None:
+            spike_metrics = compute_spike_metrics(
+                spikes=spikes,
+                attention_mask=attention_mask,
+                group_assignments=outputs.get("group_assignments", None),
+            )
+            accumulate_metric_dict(spike_metric_sums, spike_metrics)
+            spike_batches += 1
+
+        routing_weights = outputs.get("routing_weights", None)
+        if routing_weights is not None:
+            routing_metrics = compute_routing_metrics(
+                routing_weights=routing_weights,
+                attention_mask=attention_mask,
+                routing_confidence=outputs.get("routing_confidence", None),
+                agreement=outputs.get("agreement", None),
+            )
+            accumulate_metric_dict(routing_metric_sums, routing_metrics)
+            routing_batches += 1
+
+        group_prototypes = outputs.get("group_prototypes", None)
+        if group_prototypes is not None:
+            prototype_metrics = compute_prototype_metrics(group_prototypes)
+            accumulate_metric_dict(prototype_metric_sums, prototype_metrics)
+            prototype_batches += 1
+
+        postfix = build_postfix_val(
+            total_loss=total_loss,
+            total_samples=total_samples,
+            spike_metric_sums=spike_metric_sums,
+            routing_metric_sums=routing_metric_sums,
+            prototype_metric_sums=prototype_metric_sums,
+            spike_batches=spike_batches,
+            routing_batches=routing_batches,
+            prototype_batches=prototype_batches,
+        )
+        progress_bar.set_postfix(postfix)
 
     if total_samples == 0:
         raise ValueError("No samples processed during validation epoch.")
 
-    logits_all = torch.cat(all_logits, dim=0)
-    labels_all = torch.cat(all_labels, dim=0)
+    epoch_time = time.perf_counter() - epoch_start
+    samples_per_sec = total_samples / max(epoch_time, 1e-8)
+    tokens_per_sec = total_tokens / max(epoch_time, 1e-8)
 
-    acc = accuracy_from_logits(logits_all, labels_all)
-    f1 = binary_f1_from_logits(logits_all, labels_all) if num_classes == 2 else float("nan")
+    logits_all = torch.cat(val_logits_cpu, dim=0)
+    labels_all = torch.cat(val_labels_cpu, dim=0)
+    cls_metrics = compute_classification_metrics_from_logits(
+        logits=logits_all,
+        labels=labels_all,
+        num_classes=num_classes,
+    )
 
-    return {
+    metrics: Dict[str, float] = {
         "loss": total_loss / total_samples,
-        "accuracy": float(acc),
-        "f1": float(f1),
+        "accuracy": cls_metrics["accuracy"],
+        "precision": cls_metrics["precision"],
+        "recall": cls_metrics["recall"],
+        "f1": cls_metrics["f1"],
+        "epoch_time_sec": epoch_time,
+        "samples_per_sec": samples_per_sec,
+        "tokens_per_sec": tokens_per_sec,
     }
+
+    if spike_batches > 0:
+        for key, value in spike_metric_sums.items():
+            metrics[f"val_{key}"] = value / spike_batches
+
+    if routing_batches > 0:
+        for key, value in routing_metric_sums.items():
+            metrics[f"val_{key}"] = value / routing_batches
+
+    if prototype_batches > 0:
+        for key, value in prototype_metric_sums.items():
+            metrics[f"val_{key}"] = value / prototype_batches
+
+    return metrics
 
 
 # ============================================================
@@ -549,7 +965,6 @@ def main() -> None:
     checkpoint_cfg = config.get("checkpoints", {})
     runtime_cfg = config.get("runtime", {})
 
-    # Required experiment keys
     for key in ["dataset_name", "model_name", "routing_type", "run_name"]:
         if key not in experiment_cfg:
             raise KeyError(f"Missing required experiment key: '{key}'")
@@ -559,7 +974,6 @@ def main() -> None:
     routing_type = experiment_cfg["routing_type"]
     run_name = experiment_cfg["run_name"]
 
-    # Seed / device
     seed = int(training_cfg.get("seed", 42))
     deterministic = bool(training_cfg.get("deterministic", False))
     set_seed(seed, deterministic=deterministic)
@@ -572,11 +986,10 @@ def main() -> None:
         device_name = "cpu"
     device = torch.device(device_name)
 
-    # Paths
     resolved_paths = resolve_data_paths(experiment_cfg, data_cfg)
     train_path = resolved_paths["train_path"]
     val_path = resolved_paths["val_path"]
-    test_path = resolved_paths["test_path"]  # not used in training now
+    test_path = resolved_paths["test_path"]
 
     log_dir = resolve_log_dir(experiment_cfg, logging_cfg)
     ckpt_paths = resolve_checkpoint_paths(experiment_cfg, checkpoint_cfg)
@@ -586,10 +999,15 @@ def main() -> None:
     csv_logger = CSVLogger(log_dir / "train_log.csv")
     save_json(config, log_dir / "config.json")
 
-    # Data
     batch_size = int(training_cfg.get("batch_size", 32))
     num_workers = int(training_cfg.get("num_workers", 0))
     pin_memory = bool(training_cfg.get("pin_memory", False)) and device.type == "cuda"
+    max_cached_shards = int(training_cfg.get("max_cached_shards", 6))
+    validate_on_load = bool(training_cfg.get("validate_on_load", False))
+    grad_clip_norm = training_cfg.get("grad_clip_norm", None)
+    grad_clip_norm = (
+        float(grad_clip_norm) if grad_clip_norm is not None else None
+    )
 
     train_dataset, train_loader = build_dataloader(
         path=train_path,
@@ -597,6 +1015,8 @@ def main() -> None:
         shuffle=True,
         num_workers=num_workers,
         pin_memory=pin_memory,
+        max_cached_shards=max_cached_shards,
+        validate_on_load=validate_on_load,
     )
 
     val_dataset, val_loader = build_dataloader(
@@ -605,9 +1025,10 @@ def main() -> None:
         shuffle=False,
         num_workers=num_workers,
         pin_memory=pin_memory,
+        max_cached_shards=max_cached_shards,
+        validate_on_load=validate_on_load,
     )
 
-    # Router / model
     router = build_router(routing_type=routing_type, routing_cfg=routing_cfg)
 
     model = build_model(
@@ -617,7 +1038,6 @@ def main() -> None:
         router=router,
     ).to(device)
 
-    # Loss / optimizer
     criterion_name = str(training_cfg.get("criterion", "cross_entropy")).lower()
     if criterion_name != "cross_entropy":
         raise ValueError(
@@ -630,7 +1050,6 @@ def main() -> None:
     epochs = int(training_cfg.get("epochs", 10))
     num_classes = int(model_cfg["num_classes"])
 
-    # Metadata
     dataset_summary = {
         "dataset_name": dataset_name,
         "train": train_dataset.summary(),
@@ -676,7 +1095,13 @@ def main() -> None:
     best_val_f1 = float("-inf")
     best_epoch = -1
 
+    if device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats(device)
+
     for epoch in range(1, epochs + 1):
+        if device.type == "cuda":
+            torch.cuda.reset_peak_memory_stats(device)
+
         train_metrics = train_one_epoch(
             model=model,
             loader=train_loader,
@@ -685,6 +1110,8 @@ def main() -> None:
             device=device,
             epoch=epoch,
             total_epochs=epochs,
+            num_classes=num_classes,
+            grad_clip_norm=grad_clip_norm,
         )
 
         val_metrics = validate_one_epoch(
@@ -695,6 +1122,12 @@ def main() -> None:
             num_classes=num_classes,
             epoch=epoch,
             total_epochs=epochs,
+        )
+
+        gpu_peak_mem_mb = (
+            torch.cuda.max_memory_allocated(device) / (1024 ** 2)
+            if device.type == "cuda"
+            else 0.0
         )
 
         current_val_f1 = val_metrics["f1"]
@@ -712,6 +1145,7 @@ def main() -> None:
                 metrics={
                     "train": train_metrics,
                     "val": val_metrics,
+                    "gpu_peak_mem_mb": gpu_peak_mem_mb,
                 },
                 config=config,
                 path=ckpt_paths["best"],
@@ -724,6 +1158,7 @@ def main() -> None:
                     "best_checkpoint_path": str(ckpt_paths["best"]),
                     "train_metrics": train_metrics,
                     "val_metrics": val_metrics,
+                    "gpu_peak_mem_mb": gpu_peak_mem_mb,
                 },
                 log_dir / "best_metrics.json",
             )
@@ -736,12 +1171,13 @@ def main() -> None:
             metrics={
                 "train": train_metrics,
                 "val": val_metrics,
+                "gpu_peak_mem_mb": gpu_peak_mem_mb,
             },
             config=config,
             path=ckpt_paths["latest"],
         )
 
-        row = {
+        row: Dict[str, Any] = {
             "epoch": epoch,
             "dataset": dataset_name,
             "model_name": model_name,
@@ -749,23 +1185,79 @@ def main() -> None:
             "run_name": run_name,
             "train_loss": round(train_metrics["loss"], 6),
             "train_acc": round(train_metrics["accuracy"], 6),
+            "train_precision": round(train_metrics["precision"], 6),
+            "train_recall": round(train_metrics["recall"], 6),
+            "train_f1": round(train_metrics["f1"], 6),
+            "train_epoch_time_sec": round(train_metrics["epoch_time_sec"], 4),
+            "train_forward_time_sec": round(train_metrics["forward_time_sec"], 4),
+            "train_backward_time_sec": round(train_metrics["backward_time_sec"], 4),
+            "train_step_time_sec": round(train_metrics["step_time_sec"], 4),
+            "train_samples_per_sec": round(train_metrics["samples_per_sec"], 4),
+            "train_tokens_per_sec": round(train_metrics["tokens_per_sec"], 4),
             "val_loss": round(val_metrics["loss"], 6),
             "val_acc": round(val_metrics["accuracy"], 6),
+            "val_precision": round(val_metrics["precision"], 6),
+            "val_recall": round(val_metrics["recall"], 6),
             "val_f1": round(val_metrics["f1"], 6),
+            "val_epoch_time_sec": round(val_metrics["epoch_time_sec"], 4),
+            "val_samples_per_sec": round(val_metrics["samples_per_sec"], 4),
+            "val_tokens_per_sec": round(val_metrics["tokens_per_sec"], 4),
+            "gpu_peak_mem_mb": round(gpu_peak_mem_mb, 4),
             "best_val_f1_so_far": round(best_val_f1, 6),
             "is_best": int(improved),
         }
+
+        for key, value in train_metrics.items():
+            if key.startswith("train_"):
+                row[key] = round(value, 6)
+
+        for key, value in val_metrics.items():
+            if key.startswith("val_"):
+                row[key] = round(value, 6)
+
         csv_logger.log(row)
 
-        print(
-            f"Epoch {epoch:03d}/{epochs:03d} | "
-            f"train_loss={train_metrics['loss']:.4f} | "
-            f"train_acc={train_metrics['accuracy']:.4f} | "
-            f"val_loss={val_metrics['loss']:.4f} | "
-            f"val_acc={val_metrics['accuracy']:.4f} | "
-            f"val_f1={val_metrics['f1']:.4f}"
-            + ("  <-- best" if improved else "")
-        )
+        summary_parts = [
+            f"Epoch {epoch:03d}/{epochs:03d}",
+            f"train_loss={train_metrics['loss']:.4f}",
+            f"train_acc={train_metrics['accuracy']:.4f}",
+            f"train_f1={train_metrics['f1']:.4f}",
+            f"val_loss={val_metrics['loss']:.4f}",
+            f"val_acc={val_metrics['accuracy']:.4f}",
+            f"val_f1={val_metrics['f1']:.4f}",
+        ]
+
+        optional_summary_keys = [
+            ("train_firing_rate", "train_spk_rt"),
+            ("train_spikes_per_token", "train_spk_tok"),
+            ("train_routing_entropy", "train_H"),
+            ("train_routing_conf_mean", "train_r_conf"),
+            ("train_max_weight_mean", "train_max_w"),
+            ("train_dominance_fraction", "train_dom"),
+            ("train_agreement_mean", "train_agree"),
+            ("train_prototype_cosine_distance", "train_proto_dist"),
+            ("val_firing_rate", "val_spk_rt"),
+            ("val_spikes_per_token", "val_spk_tok"),
+            ("val_routing_entropy", "val_H"),
+            ("val_routing_conf_mean", "val_r_conf"),
+            ("val_max_weight_mean", "val_max_w"),
+            ("val_dominance_fraction", "val_dom"),
+            ("val_agreement_mean", "val_agree"),
+            ("val_prototype_cosine_distance", "val_proto_dist"),
+        ]
+
+        for key, label in optional_summary_keys:
+            if key in train_metrics:
+                summary_parts.append(f"{label}={train_metrics[key]:.4f}")
+            elif key in val_metrics:
+                summary_parts.append(f"{label}={val_metrics[key]:.4f}")
+
+        summary_parts.append(f"gpu_mem={gpu_peak_mem_mb:.1f}MB")
+
+        if improved:
+            summary_parts.append("<-- best")
+
+        print(" | ".join(summary_parts))
 
     training_summary = {
         "dataset_name": dataset_name,

@@ -9,7 +9,7 @@ from .encoder.core import CATSEncoder
 from .heads.classifier import ClassifierHead
 
 
-class CATSNoRoutingClassifier(nn.Module):
+class CATSClassifier(nn.Module):
     def __init__(
         self,
         embedding_dim: int,

@@ -107,6 +107,18 @@ class CATSEncoder(nn.Module):
             exc = exc * w_exc
             inh = inh * w_inh
 
+            # if self.training:
+            #     print("\n[DEBUG] GROUP CURRENTS")
+            #     print("exc_current mean:", exc.mean().item())
+            #     print("exc_current std :", exc.std().item())
+            #     print("exc_current min :", exc.min().item())
+            #     print("exc_current max :", exc.max().item())
+
+            #     print("inh_current mean:", inh.mean().item())
+            #     print("inh_current std :", inh.std().item())
+            #     print("inh_current min :", inh.min().item())
+            #     print("inh_current max :", inh.max().item())
+
         current = torch.cat([exc, inh], dim=-1)  # [B,T,H]
         return current
 
@@ -125,13 +137,34 @@ class CATSEncoder(nn.Module):
         """
         if x.ndim != 3:
             raise ValueError(f"x must be [B, T, D], got shape {tuple(x.shape)}")
+        
+        # if self.training:
+        #     print("\n[DEBUG] BEFORE NORM")
+        #     print("x mean:", x.mean().item())
+        #     print("x std :", x.std().item())
+        #     print("x min :", x.min().item())
+        #     print("x max :", x.max().item())
 
         x = self.norm(x)
+
+        # if self.training:
+        #     print("\n[DEBUG] AFTER NORM")
+        #     print("x mean:", x.mean().item())
+        #     print("x std :", x.std().item())
+        #     print("x min :", x.min().item())
+        #     print("x max :", x.max().item())
 
         # routing on continuous embeddings
         routing_out = self.router(x, attention_mask=attention_mask)
         routed_x = routing_out["routed_x"]   # [B, T, D_in]
         routing_weights = routing_out.get("routing_weights", None)
+
+        # if self.training:
+        #     print("\n[DEBUG] ROUTER OUTPUT")
+        #     print("routed_x mean:", routed_x.mean().item())
+        #     print("routed_x std :", routed_x.std().item())
+        #     print("routed_x min :", routed_x.min().item())
+        #     print("routed_x max :", routed_x.max().item())
 
         # build token-to-group current for first SNN layer
         grouped_current = self._build_group_currents(

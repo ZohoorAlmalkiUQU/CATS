@@ -106,7 +106,7 @@ class LIFLayer(BaseSpikingLayer):
             return (1,)
         if mode == "per_group":
             return (self.num_groups,)
-        if mode == "per_neuron":
+        if mode == "per_channel":
             return (self.hidden_dim,)
         raise ValueError(f"Unsupported parameter mode: {mode}")
 

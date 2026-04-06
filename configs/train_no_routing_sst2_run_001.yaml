@@ -1,7 +1,6 @@
 experiment:
   dataset_name: sst2
-  model_name: baseline
-  routing_type: no_routing
+  model_name: cats
   run_name: run_001
 
 data:
