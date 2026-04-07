@@ -1,7 +1,7 @@
 experiment:
   dataset_name: sst2
   model_name: cats
-  routing_type: carson_v2
+  routing_type: carson
   run_name: run_001
 
 data:
@@ -22,10 +22,6 @@ routing:
   kwargs:
     embedding_dim: 768
     num_groups: 2
-    num_iterations: 3
-    hidden_dim: 256
-    dropout: 0.1
-    temperature: 1.0
     use_residual: true
     use_layernorm: true
 
@@ -48,13 +44,19 @@ training:
   seed: 42
   deterministic: false
   batch_size: 32
-  epochs: 10
-  optimizer: adam
-  lr: 0.001
-  weight_decay: 1.0e-5
   num_workers: 0
   pin_memory: true
+  epochs: 10
+  optimizer: adamw
+  lr: 1e-4
+  weight_decay: 1e-5
   criterion: cross_entropy
+  grad_clip_norm: 1.0
+
+  lambda_balance: 0.02
+  lambda_entropy: 0.005
+  lambda_inh_usage: 0.01
+  target_inh_usage: 0.5
 
 logging:
   base_dir: logs

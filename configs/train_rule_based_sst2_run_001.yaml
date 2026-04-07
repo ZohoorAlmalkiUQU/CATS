@@ -1,6 +1,7 @@
 experiment:
   dataset_name: sst2
   model_name: cats
+  routing_type: rule_based
   run_name: run_001
 
 data:
@@ -18,8 +19,9 @@ model:
   kwargs: {}
 
 routing:
-  routing_type: no_routing
-  kwargs: {}
+  kwargs:
+    embedding_dim: 768
+    num_groups: 2
 
 lif:
   tau:
@@ -34,19 +36,25 @@ lif:
     mode: shared
     min: 0.1
     max: 5.0
-    init: 1.0
+    init: 0.3
 
 training:
   seed: 42
   deterministic: false
   batch_size: 32
-  epochs: 10
-  optimizer: adam
-  lr: 0.001
-  weight_decay: 1.0e-5
   num_workers: 0
   pin_memory: true
+  epochs: 10
+  optimizer: adamw
+  lr: 1e-4
+  weight_decay: 1e-5
   criterion: cross_entropy
+  grad_clip_norm: 1.0
+
+  lambda_balance: 0.0
+  lambda_entropy: 0.0
+  lambda_inh_usage: 0.0
+  target_inh_usage: 0.5
 
 logging:
   base_dir: logs

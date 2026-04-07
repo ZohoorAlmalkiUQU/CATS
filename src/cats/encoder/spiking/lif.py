@@ -36,6 +36,7 @@ class LIFLayer(BaseSpikingLayer):
     LIF spike-conversion layer.
 
     Expects continuous input current [B, T, D] and converts it to spikes.
+    Supports shared / per-group / per-channel tau and threshold.
     """
 
     def __init__(
@@ -188,18 +189,24 @@ class LIFLayer(BaseSpikingLayer):
             x_t = x[:, t, :]
             m_t = attention_mask[:, t].unsqueeze(-1)
 
+            # mask padded tokens
             x_t = x_t * m_t
+
+            # membrane update
             mem = beta * mem + x_t
 
+            # spike generation
             s_t = spike_fn(mem - threshold)
             s_t = s_t * m_t
 
+            # reset
             reset_term = s_t.detach() if self.detach_reset else s_t
             if self.reset_to_zero:
                 mem = mem * (1.0 - reset_term)
             else:
                 mem = mem - reset_term * threshold
 
+            # keep padded positions inactive
             mem = mem * m_t
 
             spikes_over_time.append(s_t)

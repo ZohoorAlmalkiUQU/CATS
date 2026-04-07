@@ -37,10 +37,10 @@ MODEL_REGISTRY = {
 }
 
 ROUTER_REGISTRY = {
-    "no_routing": "cats.encoder.routing.identity:IdentityRouter",
     "identity": "cats.encoder.routing.identity:IdentityRouter",
-    "carson_v1": "cats.encoder.routing.carson_v1:CARSONRouterV1",
-    "carson_v2": "cats.encoder.routing.carson_v2:CARSONRouterV2",
+    "linear": "cats.encoder.routing.linear:LinearRouter",
+    "rule_based": "cats.encoder.routing.rule_based:RuleBasedRouter",
+    "carson": "cats.encoder.routing.carson:CARSONRouter",
 }
 
 
@@ -612,6 +612,11 @@ def train_one_epoch(
     total_epochs: int,
     num_classes: int,
     grad_clip_norm: Optional[float] = None,
+    # Regularization parameters (read from config)
+    lambda_balance: float = 0.5,
+    lambda_entropy: float = 0.1,
+    lambda_inh_util: float = 0.5,
+    target_inh_usage: float = 0.5,
 ) -> Dict[str, float]:
     model.train()
 
@@ -635,6 +640,15 @@ def train_one_epoch(
     spike_batches = 0
     routing_batches = 0
     prototype_batches = 0
+
+    # Optional: monitor auxiliary losses
+    aux_metric_sums: Dict[str, float] = {
+        "task_loss": 0.0,
+        "balance_loss": 0.0,
+        "entropy_loss": 0.0,
+        "inh_util_loss": 0.0,
+    }
+    aux_batches = 0
 
     progress_bar = tqdm(
         loader,
@@ -663,9 +677,71 @@ def train_one_epoch(
             embeddings=embeddings,
             attention_mask=attention_mask,
         )
-        logits = outputs["logits"]
-        loss = criterion(logits, labels)
 
+        logits = outputs["logits"]
+        routing_weights = outputs.get("routing_weights", None)
+        grouped_current = outputs.get("grouped_current", None)
+        group_assignments = outputs.get("group_assignments", None)
+
+        # ------------------------------------------------------------
+        # Main task loss
+        # ------------------------------------------------------------
+        task_loss = criterion(logits, labels)
+        loss = task_loss
+
+        # ------------------------------------------------------------
+        # Auxiliary regularization losses
+        # These are designed to:
+        # 1) reduce single-group routing collapse
+        # 2) preserve routing diversity
+        # 3) keep inhibitory pathway functionally active
+        # ------------------------------------------------------------
+        balance_loss = torch.zeros((), device=device)
+        entropy_loss = torch.zeros((), device=device)
+        inh_util_loss = torch.zeros((), device=device)
+
+        if routing_weights is not None:
+            # routing_weights: [B, T, 2]
+
+            # 1) Balance loss: discourage trivial collapse to one routing group
+            # Use absolute difference instead of squared for stronger gradient
+            group_mean = routing_weights.mean(dim=(0, 1))  # [2]
+            balance_loss = torch.abs(group_mean[0] - 0.5) + torch.abs(group_mean[1] - 0.5)
+
+            # 2) Entropy loss: encourage softer / more diverse routing
+            eps = 1e-8
+            routing_entropy = -(
+                routing_weights * (routing_weights + eps).log()
+            ).sum(dim=-1).mean()
+
+            # We want to maximize entropy (soft assignments), so subtract it
+            # But bound it to prevent negative loss values
+            target_entropy = 0.69  # Maximum entropy for 2 classes: ln(2) ≈ 0.693
+            entropy_loss = (target_entropy - routing_entropy).abs()
+
+            loss = loss + lambda_balance * balance_loss + lambda_entropy * entropy_loss
+
+        if grouped_current is not None and group_assignments is not None:
+            # grouped_current: [B, T, H]
+            # group_assignments: [H], with 0 = excitatory, 1 = inhibitory
+
+            inh_mask = (group_assignments == 1)
+            if inh_mask.any():
+                inh_current = grouped_current[..., inh_mask]  # [B, T, I]
+
+                # FIXED: Encourage inhibitory pathway to be active, not zero!
+                # Previous version had -inh_strength which maximized zero current
+                inh_strength = inh_current.abs().mean()
+                
+                # Push inhibitory strength toward target value
+                inh_util_loss = (target_inh_usage - inh_strength).abs()
+                
+                # Alternative: use smooth L1 for robustness
+                # inh_util_loss = torch.nn.functional.smooth_l1_loss(
+                #     inh_strength, torch.tensor(target_inh_usage, device=device)
+                # )
+
+                loss = loss + lambda_inh_util * inh_util_loss
 
         maybe_cuda_synchronize(device)
         t2 = time.perf_counter()
@@ -699,12 +775,11 @@ def train_one_epoch(
             spike_metrics = compute_spike_metrics(
                 spikes=spikes,
                 attention_mask=attention_mask,
-                group_assignments=outputs.get("group_assignments", None),
+                group_assignments=group_assignments,
             )
             accumulate_metric_dict(spike_metric_sums, spike_metrics)
             spike_batches += 1
 
-        routing_weights = outputs.get("routing_weights", None)
         if routing_weights is not None:
             routing_metrics = compute_routing_metrics(
                 routing_weights=routing_weights,
@@ -721,6 +796,13 @@ def train_one_epoch(
             accumulate_metric_dict(prototype_metric_sums, prototype_metrics)
             prototype_batches += 1
 
+        # log auxiliary losses
+        aux_metric_sums["task_loss"] += float(task_loss.item())
+        aux_metric_sums["balance_loss"] += float(balance_loss.item())
+        aux_metric_sums["entropy_loss"] += float(entropy_loss.item())
+        aux_metric_sums["inh_util_loss"] += float(inh_util_loss.item())
+        aux_batches += 1
+
         postfix = build_postfix_train(
             total_loss=total_loss,
             total_samples=total_samples,
@@ -734,6 +816,14 @@ def train_one_epoch(
             routing_batches=routing_batches,
             prototype_batches=prototype_batches,
         )
+
+        # Add compact auxiliary loss display
+        if aux_batches > 0:
+            postfix["task"] = f"{aux_metric_sums['task_loss'] / aux_batches:.4f}"
+            postfix["bal"] = f"{aux_metric_sums['balance_loss'] / aux_batches:.4f}"
+            postfix["ent"] = f"{aux_metric_sums['entropy_loss'] / aux_batches:.4f}"
+            postfix["inh_u"] = f"{aux_metric_sums['inh_util_loss'] / aux_batches:.4f}"
+
         progress_bar.set_postfix(postfix)
 
     if total_samples == 0:
@@ -776,6 +866,12 @@ def train_one_epoch(
     if prototype_batches > 0:
         for key, value in prototype_metric_sums.items():
             metrics[f"train_{key}"] = value / prototype_batches
+
+    if aux_batches > 0:
+        metrics["train_task_loss"] = aux_metric_sums["task_loss"] / aux_batches
+        metrics["train_balance_loss"] = aux_metric_sums["balance_loss"] / aux_batches
+        metrics["train_entropy_loss"] = aux_metric_sums["entropy_loss"] / aux_batches
+        metrics["train_inh_util_loss"] = aux_metric_sums["inh_util_loss"] / aux_batches
 
     return metrics
 
@@ -1009,6 +1105,12 @@ def main() -> None:
         float(grad_clip_norm) if grad_clip_norm is not None else None
     )
 
+    # Read regularization parameters from config with improved defaults
+    lambda_balance = float(training_cfg.get("lambda_balance", 0.5))
+    lambda_entropy = float(training_cfg.get("lambda_entropy", 0.1))
+    lambda_inh_usage = float(training_cfg.get("lambda_inh_usage", 0.5))
+    target_inh_usage = float(training_cfg.get("target_inh_usage", 0.5))
+
     train_dataset, train_loader = build_dataloader(
         path=train_path,
         batch_size=batch_size,
@@ -1075,6 +1177,12 @@ def main() -> None:
         "num_workers": num_workers,
         "best_checkpoint_path": str(ckpt_paths["best"]),
         "latest_checkpoint_path": str(ckpt_paths["latest"]),
+        "regularization": {
+            "lambda_balance": lambda_balance,
+            "lambda_entropy": lambda_entropy,
+            "lambda_inh_usage": lambda_inh_usage,
+            "target_inh_usage": target_inh_usage,
+        },
     }
     save_json(run_info, log_dir / "run_info.json")
 
@@ -1090,6 +1198,7 @@ def main() -> None:
     print(f"Val path       : {val_path}")
     print(f"Log dir        : {log_dir}")
     print(f"Checkpoint dir : {ckpt_paths['dir']}")
+    print(f"Regularization : balance={lambda_balance}, entropy={lambda_entropy}, inh_usage={lambda_inh_usage}")
     print("=" * 100)
 
     best_val_f1 = float("-inf")
@@ -1112,6 +1221,10 @@ def main() -> None:
             total_epochs=epochs,
             num_classes=num_classes,
             grad_clip_norm=grad_clip_norm,
+            lambda_balance=lambda_balance,
+            lambda_entropy=lambda_entropy,
+            lambda_inh_util=lambda_inh_usage,
+            target_inh_usage=target_inh_usage,
         )
 
         val_metrics = validate_one_epoch(

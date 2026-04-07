@@ -4,6 +4,7 @@ from typing import Dict, Optional
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from .routing.identity import IdentityRouter
 from .spiking.lif import LIFLayer
@@ -22,6 +23,15 @@ class CATSEncoder(nn.Module):
         -> first SNN layer (LIF spike conversion)
         -> masked readout
         -> pooled representation
+
+    Updated design:
+    - supports routers that only return routed_x
+    - supports CARSON v2 routers that additionally return:
+        * exc_features
+        * inh_features
+        * shared_features
+    - builds excitatory and inhibitory currents from different feature paths
+      instead of reusing the same representation for both groups
     """
 
     def __init__(
@@ -45,7 +55,9 @@ class CATSEncoder(nn.Module):
 
         self.norm = nn.LayerNorm(embedding_dim) if use_layernorm else nn.Identity()
 
-        # Separate projections for excitatory and inhibitory groups
+        # ------------------------------------------------------------------
+        # Split hidden neurons into excitatory and inhibitory groups
+        # ------------------------------------------------------------------
         num_exc = int(round(hidden_dim * excitatory_ratio))
         num_exc = max(1, min(hidden_dim - 1, num_exc))
         num_inh = hidden_dim - num_exc
@@ -53,12 +65,28 @@ class CATSEncoder(nn.Module):
         self.num_exc = num_exc
         self.num_inh = num_inh
 
+        # ------------------------------------------------------------------
+        # Current projection heads
+        #
+        # Key update:
+        # - excitatory current is projected from excitatory features
+        # - inhibitory current is projected from inhibitory features
+        # This avoids using the same routed representation for both groups.
+        # ------------------------------------------------------------------
         self.exc_proj = nn.Linear(embedding_dim, num_exc)
         self.inh_proj = nn.Linear(embedding_dim, num_inh)
 
-        # learnable gains
+        # Optional shared projection for fallback / non-specialized routers
+        self.shared_exc_proj = nn.Linear(embedding_dim, num_exc)
+        self.shared_inh_proj = nn.Linear(embedding_dim, num_inh)
+
+        # Learnable gains
         self.exc_gain = nn.Parameter(torch.ones(num_exc))
         self.inh_gain = nn.Parameter(torch.ones(num_inh))
+
+        # Optional learned bias terms on current magnitudes
+        self.exc_bias = nn.Parameter(torch.zeros(num_exc))
+        self.inh_bias = nn.Parameter(torch.zeros(num_inh))
 
         # group assignments: 0 = excitatory, 1 = inhibitory
         group_assignments = torch.zeros(hidden_dim, dtype=torch.long)
@@ -74,27 +102,67 @@ class CATSEncoder(nn.Module):
 
     def _build_group_currents(
         self,
-        x: torch.Tensor,
+        routed_x: torch.Tensor,
         routing_weights: Optional[torch.Tensor] = None,
+        exc_features: Optional[torch.Tensor] = None,
+        inh_features: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
         Convert continuous token embeddings into grouped neuron currents.
 
         Args:
-            x: [B, T, D_in]
+            routed_x: [B, T, D_in]
+                Backward-compatible routed representation.
             routing_weights: [B, T, 2] or None
                 routing_weights[..., 0] = excitatory weight
                 routing_weights[..., 1] = inhibitory weight
+            exc_features: [B, T, D_in] or None
+                Specialized excitatory features from router.
+            inh_features: [B, T, D_in] or None
+                Specialized inhibitory features from router.
 
         Returns:
             current: [B, T, H]
         """
-        exc = self.exc_proj(x) * self.exc_gain.view(1, 1, self.num_exc)   # [B,T,E]
-        inh = self.inh_proj(x) * self.inh_gain.view(1, 1, self.num_inh)   # [B,T,I]
+        # --------------------------------------------------------------
+        # Fallback behavior:
+        # if router does not provide specialized features, use routed_x
+        # through dedicated fallback projections.
+        # --------------------------------------------------------------
+        if exc_features is None:
+            exc_drive = self.shared_exc_proj(routed_x)  # [B,T,E]
+        else:
+            exc_drive = self.exc_proj(exc_features)     # [B,T,E]
 
-        # inhibitory neurons should be suppressive
-        inh = -torch.abs(inh)
+        if inh_features is None:
+            inh_drive = self.shared_inh_proj(routed_x)  # [B,T,I]
+        else:
+            inh_drive = self.inh_proj(inh_features)     # [B,T,I]
 
+        # --------------------------------------------------------------
+        # Convert both branches to positive magnitudes first
+        #
+        # Why:
+        # - excitatory branch should contribute positive drive
+        # - inhibitory branch should learn useful magnitude, then we apply
+        #   the negative sign explicitly afterward
+        #
+        # This is much more stable than letting inhibitory projection freely
+        # produce arbitrary signed values and then forcing abs afterward.
+        # --------------------------------------------------------------
+        exc = F.softplus(exc_drive + self.exc_bias.view(1, 1, self.num_exc))
+        inh = F.softplus(inh_drive + self.inh_bias.view(1, 1, self.num_inh))
+
+        # Apply learnable gains
+        exc = exc * self.exc_gain.view(1, 1, self.num_exc)
+        inh = inh * self.inh_gain.view(1, 1, self.num_inh)
+
+        # Make inhibitory neurons suppressive
+        # inh = -inh
+
+        # --------------------------------------------------------------
+        # Apply routing weights if available
+        # --------------------------------------------------------------
         if routing_weights is not None:
             if routing_weights.shape[-1] != 2:
                 raise ValueError(
@@ -106,18 +174,6 @@ class CATSEncoder(nn.Module):
 
             exc = exc * w_exc
             inh = inh * w_inh
-
-            # if self.training:
-            #     print("\n[DEBUG] GROUP CURRENTS")
-            #     print("exc_current mean:", exc.mean().item())
-            #     print("exc_current std :", exc.std().item())
-            #     print("exc_current min :", exc.min().item())
-            #     print("exc_current max :", exc.max().item())
-
-            #     print("inh_current mean:", inh.mean().item())
-            #     print("inh_current std :", inh.std().item())
-            #     print("inh_current min :", inh.min().item())
-            #     print("inh_current max :", inh.max().item())
 
         current = torch.cat([exc, inh], dim=-1)  # [B,T,H]
         return current
@@ -137,42 +193,35 @@ class CATSEncoder(nn.Module):
         """
         if x.ndim != 3:
             raise ValueError(f"x must be [B, T, D], got shape {tuple(x.shape)}")
-        
-        # if self.training:
-        #     print("\n[DEBUG] BEFORE NORM")
-        #     print("x mean:", x.mean().item())
-        #     print("x std :", x.std().item())
-        #     print("x min :", x.min().item())
-        #     print("x max :", x.max().item())
 
         x = self.norm(x)
 
-        # if self.training:
-        #     print("\n[DEBUG] AFTER NORM")
-        #     print("x mean:", x.mean().item())
-        #     print("x std :", x.std().item())
-        #     print("x min :", x.min().item())
-        #     print("x max :", x.max().item())
-
-        # routing on continuous embeddings
+        # --------------------------------------------------------------
+        # Routing on continuous embeddings
+        # --------------------------------------------------------------
         routing_out = self.router(x, attention_mask=attention_mask)
-        routed_x = routing_out["routed_x"]   # [B, T, D_in]
+
+        routed_x = routing_out["routed_x"]  # [B, T, D_in]
         routing_weights = routing_out.get("routing_weights", None)
 
-        # if self.training:
-        #     print("\n[DEBUG] ROUTER OUTPUT")
-        #     print("routed_x mean:", routed_x.mean().item())
-        #     print("routed_x std :", routed_x.std().item())
-        #     print("routed_x min :", routed_x.min().item())
-        #     print("routed_x max :", routed_x.max().item())
+        # New CARSON v2-specific features, if available
+        exc_features = routing_out.get("exc_features", None)
+        inh_features = routing_out.get("inh_features", None)
+        shared_features = routing_out.get("shared_features", None)
 
-        # build token-to-group current for first SNN layer
+        # --------------------------------------------------------------
+        # Build token-to-group current for first SNN layer
+        # --------------------------------------------------------------
         grouped_current = self._build_group_currents(
-            routed_x,
+            routed_x=routed_x,
             routing_weights=routing_weights,
+            exc_features=exc_features,
+            inh_features=inh_features,
         )
 
-        # first SNN layer converts routed embeddings to spikes
+        # --------------------------------------------------------------
+        # First SNN layer converts routed embeddings to spikes
+        # --------------------------------------------------------------
         spk_out = self.spiking_layer(
             grouped_current,
             attention_mask=attention_mask,
@@ -184,6 +233,9 @@ class CATSEncoder(nn.Module):
 
         return {
             "routed_embeddings": routed_x,
+            "shared_features": shared_features,
+            "exc_features": exc_features,
+            "inh_features": inh_features,
             "grouped_current": grouped_current,
             "spikes": spikes,
             "membrane": spk_out["membrane"],
@@ -193,4 +245,7 @@ class CATSEncoder(nn.Module):
             "threshold": spk_out["threshold"],
             "group_assignments": self.group_assignments,
             "routing_weights": routing_weights,
+            "routing_logits": routing_out.get("routing_logits", None),
+            "routing_confidence": routing_out.get("routing_confidence", None),
+            "context_vector": routing_out.get("context_vector", None),
         }
