@@ -7,10 +7,11 @@ import torch.nn as nn
 
 from .base import BaseSpikingLayer
 from .params import (
+    build_raw_parameter,
+    build_spec_from_config,
     constrain_bounded,
     constrain_positive,
     expand_parameter,
-    build_spec_from_config,
 )
 
 
@@ -33,10 +34,26 @@ def spike_fn(x: torch.Tensor) -> torch.Tensor:
 
 class LIFLayer(BaseSpikingLayer):
     """
-    LIF spike-conversion layer.
+    Standard LIF spike-conversion layer.
 
-    Expects continuous input current [B, T, D] and converts it to spikes.
-    Supports shared / per-group / per-channel tau and threshold.
+    This layer keeps a standard firing rule for all neurons:
+        spike if membrane >= threshold
+
+    Important:
+    ----------
+    Excitatory / inhibitory behavior should NOT be encoded here by using a
+    negative threshold or a different spike condition.
+
+    Instead, antagonistic behavior should be introduced upstream by constructing
+    a signed input current before calling this layer, e.g.:
+        x_total = x_exc - x_inh
+
+    This layer is only responsible for:
+        - membrane integration
+        - spike generation
+        - reset
+        - configurable tau / threshold
+          (shared / per_group / per_channel)
     """
 
     def __init__(
@@ -69,49 +86,31 @@ class LIFLayer(BaseSpikingLayer):
 
         self.threshold_spec = build_spec_from_config(
             cfg=threshold_cfg,
-            default_init=0.0,
-            default_learnable=False,
-            default_mode="shared",
+            default_init=1.0,
+            default_learnable=True,
+            default_mode="per_group",
             default_min=0.1,
             default_max=5.0,
         )
 
-        # ---- Initialize raw tau ----
-        tau_shape = self._param_shape(self.tau_spec.mode)
-        tau_init = torch.full(
-            tau_shape,
-            float(self.tau_spec.init_value),
-            dtype=torch.float32,
+        # Raw unconstrained parameters.
+        # Their learnability is controlled by ParameterSpec.learnable.
+        self.raw_tau = build_raw_parameter(
+            spec=self.tau_spec,
+            hidden_dim=self.hidden_dim,
+            num_groups=self.num_groups,
         )
 
-        if self.tau_spec.learnable:
-            self.raw_tau = nn.Parameter(tau_init)
-        else:
-            self.register_buffer("raw_tau", tau_init)
-
-        # ---- Initialize raw threshold ----
-        threshold_shape = self._param_shape(self.threshold_spec.mode)
-        threshold_init = torch.full(
-            threshold_shape,
-            float(self.threshold_spec.init_value),
-            dtype=torch.float32,
+        self.raw_threshold = build_raw_parameter(
+            spec=self.threshold_spec,
+            hidden_dim=self.hidden_dim,
+            num_groups=self.num_groups,
         )
 
-        if self.threshold_spec.learnable:
-            self.raw_threshold = nn.Parameter(threshold_init)
-        else:
-            self.register_buffer("raw_threshold", threshold_init)
-
-    def _param_shape(self, mode: str) -> tuple[int, ...]:
-        if mode == "shared":
-            return (1,)
-        if mode == "per_group":
-            return (self.num_groups,)
-        if mode == "per_channel":
-            return (self.hidden_dim,)
-        raise ValueError(f"Unsupported parameter mode: {mode}")
-
-    def _compute_tau(self, group_assignments: Optional[torch.Tensor]) -> torch.Tensor:
+    def _compute_tau(
+        self,
+        group_assignments: Optional[torch.Tensor],
+    ) -> torch.Tensor:
         if self.tau_spec.max_value is not None:
             tau_param = constrain_bounded(
                 self.raw_tau,
@@ -125,27 +124,30 @@ class LIFLayer(BaseSpikingLayer):
             )
 
         return expand_parameter(
-            tau_param,
+            param=tau_param,
             mode=self.tau_spec.mode,
             hidden_dim=self.hidden_dim,
             group_assignments=group_assignments,
         )
 
-    def _compute_threshold(self, group_assignments: Optional[torch.Tensor]) -> torch.Tensor:
+    def _compute_threshold(
+        self,
+        group_assignments: Optional[torch.Tensor],
+    ) -> torch.Tensor:
         if self.threshold_spec.max_value is not None:
-            thr_param = constrain_bounded(
+            threshold_param = constrain_bounded(
                 self.raw_threshold,
                 min_value=self.threshold_spec.min_value,
                 max_value=self.threshold_spec.max_value,
             )
         else:
-            thr_param = constrain_positive(
+            threshold_param = constrain_positive(
                 self.raw_threshold,
                 min_value=self.threshold_spec.min_value,
             )
 
         return expand_parameter(
-            thr_param,
+            param=threshold_param,
             mode=self.threshold_spec.mode,
             hidden_dim=self.hidden_dim,
             group_assignments=group_assignments,
@@ -157,6 +159,27 @@ class LIFLayer(BaseSpikingLayer):
         attention_mask: Optional[torch.Tensor] = None,
         group_assignments: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
+        """
+        Args:
+            x:
+                Continuous signed current of shape [B, T, D].
+                If you want real excitatory/inhibitory antagonism, the sign should
+                already be injected before calling this layer.
+            attention_mask:
+                Optional mask of shape [B, T].
+            group_assignments:
+                Optional tensor of shape [D] when using per_group parameters.
+                Each channel is mapped to a group id in [0, num_groups-1].
+
+        Returns:
+            {
+                "spikes": [B, T, D],
+                "membrane": [B, T, D],
+                "beta": [D],
+                "tau": [D],
+                "threshold": [D],
+            }
+        """
         if x.ndim != 3:
             raise ValueError(f"x must be [B, T, D], got {tuple(x.shape)}")
 
@@ -174,11 +197,28 @@ class LIFLayer(BaseSpikingLayer):
         else:
             attention_mask = attention_mask.to(device=device, dtype=dtype)
 
+        if self.tau_spec.mode == "per_group" or self.threshold_spec.mode == "per_group":
+            if group_assignments is None:
+                raise ValueError(
+                    "group_assignments is required when tau/threshold mode is 'per_group'"
+                )
+            if group_assignments.ndim != 1 or group_assignments.numel() != self.hidden_dim:
+                raise ValueError(
+                    "group_assignments must have shape [D] and match hidden_dim"
+                )
+            group_assignments = group_assignments.to(device=device, dtype=torch.long)
+
         tau = self._compute_tau(group_assignments).to(device=device, dtype=dtype)
-        threshold = self._compute_threshold(group_assignments).to(device=device, dtype=dtype)
+        threshold = self._compute_threshold(group_assignments).to(
+            device=device,
+            dtype=dtype,
+        )
+
+        # Standard LIF decay factor, assuming dt = 1
         beta = torch.exp(-1.0 / tau).clamp(min=0.0, max=0.9999)
 
         mem = torch.zeros((bsz, hidden_dim), device=device, dtype=dtype)
+
         spikes_over_time = []
         mem_over_time = []
 
@@ -189,24 +229,24 @@ class LIFLayer(BaseSpikingLayer):
             x_t = x[:, t, :]
             m_t = attention_mask[:, t].unsqueeze(-1)
 
-            # mask padded tokens
+            # Ignore padded tokens
             x_t = x_t * m_t
 
-            # membrane update
+            # Standard membrane integration
             mem = beta * mem + x_t
 
-            # spike generation
+            # Standard firing condition for all neurons
             s_t = spike_fn(mem - threshold)
             s_t = s_t * m_t
 
-            # reset
+            # Reset
             reset_term = s_t.detach() if self.detach_reset else s_t
             if self.reset_to_zero:
                 mem = mem * (1.0 - reset_term)
             else:
                 mem = mem - reset_term * threshold
 
-            # keep padded positions inactive
+            # Keep padded states inactive
             mem = mem * m_t
 
             spikes_over_time.append(s_t)
@@ -220,5 +260,5 @@ class LIFLayer(BaseSpikingLayer):
             "membrane": membrane,
             "beta": beta.squeeze(0),
             "tau": tau,
-            "threshold": threshold.squeeze(0),
+            "threshold": threshold,
         }

@@ -1,8 +1,23 @@
+# NOTE:
+# Run 002 uses positive inhibitory currents by disabling the explicit sign flip
+# in the encoder core:
+#   # inh = -inh
+#
+# Purpose:
+# - Test whether removing the negative inhibitory current improves optimization stability
+# - Check whether the inhibitory group can participate without collapsing
+# - Isolate the effect of current sign from overly strong auxiliary losses
+#
+# Expected comparison against run_001:
+# - Higher inhibitory firing/activity
+# - Less extreme routing dominance by the excitatory group
+# - More stable training dynamics overall
+
 experiment:
   dataset_name: sst2
   model_name: cats
-  routing_type: linear
-  run_name: run_001
+  routing_type: carson
+  run_name: run_002
 
 data:
   processed_root: data/processed
@@ -22,6 +37,10 @@ routing:
   kwargs:
     embedding_dim: 768
     num_groups: 2
+    num_iterations: 3
+    hidden_dim: 256
+    dropout: 0.1
+    temperature: 1.0
     use_residual: true
     use_layernorm: true
 
@@ -36,9 +55,9 @@ lif:
   threshold:
     learnable: true
     mode: per_group
-    min: [0.8, 0.4]
-    max: [1.8, 1.2]
-    init: [1.2, 0.8]
+    min: [0.8, 0.1]
+    max: [1.8, 0.5]
+    init: [1.2, 0.3]
 
 training:
   seed: 42
@@ -53,6 +72,7 @@ training:
   criterion: cross_entropy
   grad_clip_norm: 1.0
 
+  # Reduced auxiliary losses for cleaner evaluation of positive-current behavior
   lambda_balance: 0.05
   lambda_entropy: 0.0005
   lambda_inh_usage: 0.05

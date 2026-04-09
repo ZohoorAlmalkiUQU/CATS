@@ -24,14 +24,19 @@ class CATSEncoder(nn.Module):
         -> masked readout
         -> pooled representation
 
-    Updated design:
-    - supports routers that only return routed_x
-    - supports CARSON v2 routers that additionally return:
+    Supported router behavior:
+    - routers that only return:
+        * routed_x
+    - routers that additionally return:
+        * routing_weights
         * exc_features
         * inh_features
         * shared_features
-    - builds excitatory and inhibitory currents from different feature paths
-      instead of reusing the same representation for both groups
+
+    Design choice:
+    - excitatory current is positive
+    - inhibitory current is explicitly negative
+    - spike generation remains standard inside LIFLayer
     """
 
     def __init__(
@@ -68,23 +73,24 @@ class CATSEncoder(nn.Module):
         # ------------------------------------------------------------------
         # Current projection heads
         #
-        # Key update:
-        # - excitatory current is projected from excitatory features
-        # - inhibitory current is projected from inhibitory features
-        # This avoids using the same routed representation for both groups.
+        # If specialized router features are available:
+        #   exc current <- exc_features
+        #   inh current <- inh_features
+        #
+        # Otherwise:
+        #   both branches fall back to routed_x through separate projections
         # ------------------------------------------------------------------
         self.exc_proj = nn.Linear(embedding_dim, num_exc)
         self.inh_proj = nn.Linear(embedding_dim, num_inh)
 
-        # Optional shared projection for fallback / non-specialized routers
         self.shared_exc_proj = nn.Linear(embedding_dim, num_exc)
         self.shared_inh_proj = nn.Linear(embedding_dim, num_inh)
 
-        # Learnable gains
+        # Learnable gains for current magnitudes
         self.exc_gain = nn.Parameter(torch.ones(num_exc))
         self.inh_gain = nn.Parameter(torch.ones(num_inh))
 
-        # Optional learned bias terms on current magnitudes
+        # Learnable biases before softplus magnitude mapping
         self.exc_bias = nn.Parameter(torch.zeros(num_exc))
         self.inh_bias = nn.Parameter(torch.zeros(num_inh))
 
@@ -111,71 +117,84 @@ class CATSEncoder(nn.Module):
         Convert continuous token embeddings into grouped neuron currents.
 
         Args:
-            routed_x: [B, T, D_in]
+            routed_x:
+                [B, T, D_in]
                 Backward-compatible routed representation.
-            routing_weights: [B, T, 2] or None
+            routing_weights:
+                [B, T, 2] or None
                 routing_weights[..., 0] = excitatory weight
                 routing_weights[..., 1] = inhibitory weight
-            exc_features: [B, T, D_in] or None
+            exc_features:
+                [B, T, D_in] or None
                 Specialized excitatory features from router.
-            inh_features: [B, T, D_in] or None
+            inh_features:
+                [B, T, D_in] or None
                 Specialized inhibitory features from router.
 
         Returns:
             current: [B, T, H]
+                Concatenation of:
+                    positive excitatory currents
+                    negative inhibitory currents
         """
+        if routed_x.ndim != 3:
+            raise ValueError(f"routed_x must be [B, T, D], got {tuple(routed_x.shape)}")
+
         # --------------------------------------------------------------
-        # Fallback behavior:
-        # if router does not provide specialized features, use routed_x
-        # through dedicated fallback projections.
+        # Build branch-specific drives
         # --------------------------------------------------------------
         if exc_features is None:
-            exc_drive = self.shared_exc_proj(routed_x)  # [B,T,E]
+            exc_drive = self.shared_exc_proj(routed_x)   # [B, T, E]
         else:
-            exc_drive = self.exc_proj(exc_features)     # [B,T,E]
+            exc_drive = self.exc_proj(exc_features)      # [B, T, E]
 
         if inh_features is None:
-            inh_drive = self.shared_inh_proj(routed_x)  # [B,T,I]
+            inh_drive = self.shared_inh_proj(routed_x)   # [B, T, I]
         else:
-            inh_drive = self.inh_proj(inh_features)     # [B,T,I]
+            inh_drive = self.inh_proj(inh_features)      # [B, T, I]
 
         # --------------------------------------------------------------
-        # Convert both branches to positive magnitudes first
+        # Convert to positive magnitudes first
         #
-        # Why:
-        # - excitatory branch should contribute positive drive
-        # - inhibitory branch should learn useful magnitude, then we apply
-        #   the negative sign explicitly afterward
-        #
-        # This is much more stable than letting inhibitory projection freely
-        # produce arbitrary signed values and then forcing abs afterward.
+        # Then apply inhibitory sign explicitly afterward.
+        # This is more stable than learning arbitrary signed values directly.
         # --------------------------------------------------------------
         exc = F.softplus(exc_drive + self.exc_bias.view(1, 1, self.num_exc))
         inh = F.softplus(inh_drive + self.inh_bias.view(1, 1, self.num_inh))
 
-        # Apply learnable gains
+        # Learnable current gains
         exc = exc * self.exc_gain.view(1, 1, self.num_exc)
         inh = inh * self.inh_gain.view(1, 1, self.num_inh)
-
-        # Make inhibitory neurons suppressive
-        # inh = -inh
 
         # --------------------------------------------------------------
         # Apply routing weights if available
         # --------------------------------------------------------------
         if routing_weights is not None:
+            if routing_weights.ndim != 3:
+                raise ValueError(
+                    f"routing_weights must be [B, T, 2], got {tuple(routing_weights.shape)}"
+                )
+            if routing_weights.shape[:2] != routed_x.shape[:2]:
+                raise ValueError(
+                    "routing_weights must match routed_x on batch and sequence dimensions"
+                )
             if routing_weights.shape[-1] != 2:
                 raise ValueError(
                     f"Expected routing_weights last dim = 2, got {routing_weights.shape[-1]}"
                 )
 
-            w_exc = routing_weights[..., 0].unsqueeze(-1)   # [B,T,1]
-            w_inh = routing_weights[..., 1].unsqueeze(-1)   # [B,T,1]
+            w_exc = routing_weights[..., 0].unsqueeze(-1)   # [B, T, 1]
+            w_inh = routing_weights[..., 1].unsqueeze(-1)   # [B, T, 1]
 
             exc = exc * w_exc
             inh = inh * w_inh
 
-        current = torch.cat([exc, inh], dim=-1)  # [B,T,H]
+        # --------------------------------------------------------------
+        # Make inhibitory currents explicitly suppressive
+        # --------------------------------------------------------------
+        # inh = -inh
+
+        current = torch.cat([exc, inh], dim=-1)  # [B, T, H]
         return current
 
     def forward(
@@ -185,8 +204,10 @@ class CATSEncoder(nn.Module):
     ) -> Dict[str, torch.Tensor]:
         """
         Args:
-            x: [B, T, D_in]
-            attention_mask: [B, T] or None
+            x:
+                [B, T, D_in]
+            attention_mask:
+                [B, T] or None
 
         Returns:
             dict with encoder outputs and diagnostics
@@ -201,10 +222,13 @@ class CATSEncoder(nn.Module):
         # --------------------------------------------------------------
         routing_out = self.router(x, attention_mask=attention_mask)
 
-        routed_x = routing_out["routed_x"]  # [B, T, D_in]
+        if "routed_x" not in routing_out:
+            raise KeyError("Router output must contain 'routed_x'")
+
+        routed_x = routing_out["routed_x"]                     # [B, T, D_in]
         routing_weights = routing_out.get("routing_weights", None)
 
-        # New CARSON v2-specific features, if available
+        # Optional specialized features from semantic routers (e.g. CARSON v2)
         exc_features = routing_out.get("exc_features", None)
         inh_features = routing_out.get("inh_features", None)
         shared_features = routing_out.get("shared_features", None)
@@ -220,7 +244,7 @@ class CATSEncoder(nn.Module):
         )
 
         # --------------------------------------------------------------
-        # First SNN layer converts routed embeddings to spikes
+        # Convert current to spikes using standard LIF dynamics
         # --------------------------------------------------------------
         spk_out = self.spiking_layer(
             grouped_current,
