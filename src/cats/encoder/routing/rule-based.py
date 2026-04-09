@@ -10,7 +10,7 @@ from .base import BaseRouter
 
 class RuleBasedRouter(BaseRouter):
     """
-    CARSON v3: deterministic mean-based routing.
+    Rule-Based: deterministic mean-based routing.
 
     Core idea:
     - For each sample, compute a global mean over all valid token values.

@@ -55,9 +55,9 @@ lif:
   threshold:
     learnable: true
     mode: per_group
-    min: [0.8, 0.1]
-    max: [1.8, 0.5]
-    init: [1.2, 0.3]
+    min: [0.8, 0.6]
+    max: [1.8, 1.2]
+    init: [1.2, 0.9]
 
 training:
   seed: 42
