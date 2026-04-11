@@ -123,19 +123,37 @@ def compute_spike_metrics(
                 f"got {group_assignments.shape[0]}"
             )
 
-        group_assignments = group_assignments.to(spikes.device)
+        group_assignments = group_assignments.to(
+            device=spikes.device,
+            dtype=torch.long,
+        )
+
         exc_idx = group_assignments == 0
         inh_idx = group_assignments == 1
 
         if exc_idx.any():
-            exc_spikes = masked_spikes[..., exc_idx].sum().item()
+            exc_spikes_tensor = masked_spikes[..., exc_idx]
+            exc_spikes = exc_spikes_tensor.sum().item()
             exc_valid = max(float(mask3[..., exc_idx].sum().item()), 1.0)
+
             metrics["exc_firing_rate"] = float(exc_spikes / exc_valid)
+            metrics["exc_total_spikes"] = float(exc_spikes)
+            metrics["exc_spikes_per_token"] = float(exc_spikes / valid_tokens)
+            metrics["exc_spikes_per_sample"] = float(
+                exc_spikes_tensor.sum(dim=(1, 2)).mean().item()
+            )
 
         if inh_idx.any():
-            inh_spikes = masked_spikes[..., inh_idx].sum().item()
+            inh_spikes_tensor = masked_spikes[..., inh_idx]
+            inh_spikes = inh_spikes_tensor.sum().item()
             inh_valid = max(float(mask3[..., inh_idx].sum().item()), 1.0)
+
             metrics["inh_firing_rate"] = float(inh_spikes / inh_valid)
+            metrics["inh_total_spikes"] = float(inh_spikes)
+            metrics["inh_spikes_per_token"] = float(inh_spikes / valid_tokens)
+            metrics["inh_spikes_per_sample"] = float(
+                inh_spikes_tensor.sum(dim=(1, 2)).mean().item()
+            )
 
         if "exc_firing_rate" in metrics and "inh_firing_rate" in metrics:
             metrics["exc_inh_diff"] = float(
@@ -208,19 +226,20 @@ def compute_routing_metrics(
     rw = routing_weights * mask_exp
 
     eps = 1e-8
-    rw_safe = rw.clamp(min=eps, max=1.0)
+    rw_safe = rw.clamp(min=eps)
 
-    # Token-level entropy averaged over valid tokens
     entropy = -(rw_safe * rw_safe.log()).sum(dim=-1)  # [B, T]
     entropy = (entropy * mask).sum().item() / valid_count
 
     metrics: Dict[str, float] = {
         "routing_entropy": float(entropy),
+        "num_groups": float(num_groups),
     }
 
-    # -------------------------
-    # Group-wise routing stats
-    # -------------------------
+    valid_rw = rw[mask_bool]
+    if valid_rw.numel() > 0:
+        metrics["routing_variance"] = float(valid_rw.var(unbiased=False).item())
+
     if num_groups >= 2:
         exc = rw[..., 0]
         inh = rw[..., 1]
@@ -231,10 +250,7 @@ def compute_routing_metrics(
         metrics["exc_weight_mean"] = float(exc_mean)
         metrics["inh_weight_mean"] = float(inh_mean)
 
-        # signed difference
         metrics["exc_inh_balance"] = float(exc_mean - inh_mean)
-
-        # absolute gap
         metrics["weight_gap"] = float(abs(exc_mean - inh_mean))
 
         exc_vals = exc[mask_bool]
@@ -245,9 +261,6 @@ def compute_routing_metrics(
         if inh_vals.numel() > 0:
             metrics["inh_weight_std"] = float(inh_vals.std(unbiased=False).item())
 
-    # -------------------------
-    # Optional routing confidence
-    # -------------------------
     if routing_confidence is not None:
         rc = routing_confidence.to(
             device=routing_weights.device,
@@ -261,9 +274,6 @@ def compute_routing_metrics(
         if rc_vals.numel() > 0:
             metrics["routing_conf_std"] = float(rc_vals.std(unbiased=False).item())
 
-    # -------------------------
-    # Agreement metrics (CARSON v2 critical)
-    # -------------------------
     if agreement is not None:
         agreement = agreement.to(
             device=routing_weights.device,
@@ -298,10 +308,6 @@ def compute_routing_metrics(
                     inh_vals.std(unbiased=False).item()
                 )
 
-    # -------------------------
-    # Group-wise usage
-    # -------------------------
-    # Argmax is computed for all positions, then restricted to valid tokens only.
     dominant_group = rw.argmax(dim=-1)  # [B, T]
 
     if mask_bool.any():
@@ -316,15 +322,9 @@ def compute_routing_metrics(
                 (dominant_vals == 1).float().mean().item()
             )
 
-    # -------------------------
-    # Routing sharpness
-    # -------------------------
     max_weight = rw.max(dim=-1).values  # [B, T]
     metrics["max_weight_mean"] = float((max_weight * mask).sum().item() / valid_count)
 
-    # -------------------------
-    # Dominance / collapse detector
-    # -------------------------
     high_conf = (max_weight > 0.9).to(dtype=routing_weights.dtype)
     metrics["dominance_fraction"] = float(
         (high_conf * mask).sum().item() / valid_count
@@ -333,7 +333,9 @@ def compute_routing_metrics(
     return metrics
 
 
-def compute_prototype_metrics(group_prototypes: Optional[torch.Tensor]) -> Dict[str, float]:
+def compute_prototype_metrics(
+    group_prototypes: Optional[torch.Tensor],
+) -> Dict[str, float]:
     """
     Compute prototype separation metrics.
 

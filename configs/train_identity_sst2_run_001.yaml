@@ -21,20 +21,55 @@ model:
 routing:
   kwargs: {}
 
-lif:
+lif_exc:
   tau:
     learnable: true
-    mode: per_group
-    min: [12.0, 5.0]
-    max: [24.0, 12.0]
-    init: [18.0, 8.0]
+    mode: shared
+    min: 12.0
+    max: 24.0
+    init: 18.0
 
   threshold:
     learnable: true
-    mode: per_group
-    min: [0.8, 0.4]
-    max: [1.8, 1.2]
-    init: [1.2, 0.8]
+    mode: shared
+    min: 0.8
+    max: 1.8
+    init: 1.2
+
+  adaptive_threshold:
+    enabled: true
+    mode: shared
+    init: 0.0
+    decay: 0.95
+    spike_increment: 0.15
+    min: 0.0
+    max: 3.0
+    detach_spikes: true
+
+lif_inh:
+  tau:
+    learnable: true
+    mode: shared
+    min: 5.0
+    max: 12.0
+    init: 8.0
+
+  threshold:
+    learnable: true
+    mode: shared
+    min: 0.1
+    max: 0.5
+    init: 0.3
+
+  adaptive_threshold:
+    enabled: true
+    mode: shared
+    init: 0.0
+    decay: 0.95
+    spike_increment: 0.15
+    min: 0.0
+    max: 3.0
+    detach_spikes: true
 
 training:
   seed: 42
@@ -52,14 +87,7 @@ training:
   lambda_balance: 0.0
   lambda_entropy: 0.0
   lambda_inh_usage: 0.0
-  target_inh_usage: 0.0
-  
-# No routing regularization is used for the identity router.
-# Reason:
-# - The identity setup does not learn routing decisions across groups.
-# - There is no trainable routing distribution to balance, smooth, or constrain.
-# - Therefore, balance/entropy/inhibitory-usage penalties are not meaningful here.
-# - Keeping these terms at zero avoids adding artificial constraints to a no-routing baseline.
+  target_inh_usage: 0.3
 
 logging:
   base_dir: logs

@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 
 from .base import BaseRouter
-
+from cats.encoder.position import PositionalEncoding, RotaryPositionalEncoding
 
 class CARSONRouter(BaseRouter):
     """
@@ -48,6 +48,8 @@ class CARSONRouter(BaseRouter):
         temperature: float = 1.5,
         use_residual: bool = True,
         use_layernorm: bool = True,
+        position_type: str = "none",
+        position_base: float = 10000.0,
     ) -> None:
         super().__init__()
 
@@ -67,6 +69,25 @@ class CARSONRouter(BaseRouter):
         self.hidden_dim = hidden_dim or embedding_dim
         self.temperature = temperature
         self.use_residual = use_residual
+        self.position_type = position_type
+        self.position_encoder = None
+
+        self.position_type = position_type
+        self.position_base = position_base
+        self.position_encoder: Optional[PositionalEncoding] = None
+
+        if self.position_type == "none":
+            self.position_encoder = None
+        elif self.position_type == "rope":
+            self.position_encoder = RotaryPositionalEncoding(
+                dim=embedding_dim,
+                base=position_base,
+            )
+        else:
+            raise ValueError(
+                f"Unsupported position_type='{self.position_type}'. "
+                f"Expected one of: ['none', 'rope']"
+            )
 
         self.input_norm = (
             nn.LayerNorm(embedding_dim) if use_layernorm else nn.Identity()
@@ -257,11 +278,14 @@ class CARSONRouter(BaseRouter):
                 )
             mask = attention_mask.to(device=x.device, dtype=x.dtype)
 
+
         # ------------------------------------------------------------------
         # Step 1: normalize input
         # ------------------------------------------------------------------
         x_norm = self.input_norm(x)  # [B,T,D]
 
+        if self.position_encoder is not None:
+            x_norm = self.position_encoder(x_norm, attention_mask=attention_mask)
         # ------------------------------------------------------------------
         # Step 2: build shared and specialized token features
         # ------------------------------------------------------------------

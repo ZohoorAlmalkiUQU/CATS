@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import importlib
 import json
 import time
 from datetime import datetime
@@ -17,6 +16,7 @@ from tqdm.auto import tqdm
 from cats.data.dataset import EmbeddingDataset
 from cats.data.collate import collate_embeddings
 from cats.utils.config import load_config
+from cats.builders.model_builder import build_model
 from cats.utils.metrics import (
     accuracy_from_logits,
     binary_precision_from_logits,
@@ -27,21 +27,6 @@ from cats.utils.metrics import (
     compute_prototype_metrics,
 )
 from cats.utils.seed import set_seed
-
-
-# ============================================================
-# Registries
-# ============================================================
-MODEL_REGISTRY = {
-    "cats": "cats.model:CATSClassifier",
-}
-
-ROUTER_REGISTRY = {
-    "identity": "cats.encoder.routing.identity:IdentityRouter",
-    "linear": "cats.encoder.routing.linear:LinearRouter",
-    "rule_based": "cats.encoder.routing.rule_based:RuleBasedRouter",
-    "carson": "cats.encoder.routing.carson:CARSONRouter",
-}
 
 
 # ============================================================
@@ -67,22 +52,6 @@ def _get_required_section(config: Dict[str, Any], name: str) -> Dict[str, Any]:
     if not isinstance(section, dict):
         raise TypeError(f"Config section '{name}' must be a dictionary")
     return section
-
-
-def import_from_string(path: str):
-    """
-    Expects:
-        'package.module:ClassName'
-    """
-    if ":" not in path:
-        raise ValueError(
-            f"Invalid class path '{path}'. Expected format 'package.module:ClassName'"
-        )
-    module_name, class_name = path.split(":")
-    module = importlib.import_module(module_name)
-    if not hasattr(module, class_name):
-        raise AttributeError(f"Module '{module_name}' has no attribute '{class_name}'")
-    return getattr(module, class_name)
 
 
 def save_json(data: Dict[str, Any], path: Path) -> None:
@@ -258,54 +227,8 @@ def move_batch_to_device(
 
 
 # ============================================================
-# Builders
+# Optimizer
 # ============================================================
-def build_router(routing_type: str, routing_cfg: Dict[str, Any]) -> nn.Module:
-    class_path = routing_cfg.get("class_path", None)
-    if class_path is None:
-        if routing_type not in ROUTER_REGISTRY:
-            raise ValueError(
-                f"Unknown routing_type='{routing_type}'. "
-                f"Add it to ROUTER_REGISTRY or provide routing.class_path in config."
-            )
-        class_path = ROUTER_REGISTRY[routing_type]
-
-    RouterClass = import_from_string(class_path)
-    router_kwargs = routing_cfg.get("kwargs", {}) or {}
-    return RouterClass(**router_kwargs)
-
-
-def build_model(
-    experiment_cfg: Dict[str, Any],
-    model_cfg: Dict[str, Any],
-    lif_cfg: Dict[str, Any],
-    router: nn.Module,
-) -> nn.Module:
-    model_name = experiment_cfg["model_name"]
-    class_path = model_cfg.get("class_path", None)
-    if class_path is None:
-        if model_name not in MODEL_REGISTRY:
-            raise ValueError(
-                f"Unknown model_name='{model_name}'. "
-                f"Add it to MODEL_REGISTRY or provide model.class_path in config."
-            )
-        class_path = MODEL_REGISTRY[model_name]
-
-    ModelClass = import_from_string(class_path)
-    model_kwargs = model_cfg.get("kwargs", {}) or {}
-
-    model = ModelClass(
-        embedding_dim=int(model_cfg["embedding_dim"]),
-        hidden_dim=int(model_cfg.get("hidden_dim", 256)),
-        num_classes=int(model_cfg["num_classes"]),
-        excitatory_ratio=float(model_cfg.get("excitatory_ratio", 0.5)),
-        router=router,
-        lif_config=lif_cfg,
-        **model_kwargs,
-    )
-    return model
-
-
 def build_optimizer(
     model: nn.Module,
     training_cfg: Dict[str, Any],
@@ -320,12 +243,14 @@ def build_optimizer(
             lr=lr,
             weight_decay=weight_decay,
         )
+
     if optimizer_name == "adamw":
         return torch.optim.AdamW(
             model.parameters(),
             lr=lr,
             weight_decay=weight_decay,
         )
+
     if optimizer_name == "sgd":
         momentum = float(training_cfg.get("momentum", 0.9))
         return torch.optim.SGD(
@@ -404,7 +329,7 @@ def compute_classification_metrics_from_logits(
 
 
 # ============================================================
-# Metric collection helpers
+# Metric helpers
 # ============================================================
 def accumulate_metric_dict(
     accumulator: Dict[str, float],
@@ -421,6 +346,23 @@ def append_cpu_tensors(
     storage.append(tensor.detach().cpu())
 
 
+def maybe_add_tensor_stats(
+    accumulator: Dict[str, float],
+    outputs: Dict[str, Any],
+    key: str,
+    prefix: str,
+) -> None:
+    tensor = outputs.get(key, None)
+    if tensor is None or not torch.is_tensor(tensor):
+        return
+    if tensor.numel() == 0:
+        return
+
+    t = tensor.detach().float()
+    accumulator[f"{prefix}_mean"] = accumulator.get(f"{prefix}_mean", 0.0) + float(t.mean().item())
+    accumulator[f"{prefix}_std"] = accumulator.get(f"{prefix}_std", 0.0) + float(t.std(unbiased=False).item())
+
+
 def build_postfix_train(
     total_loss: float,
     total_samples: int,
@@ -430,9 +372,13 @@ def build_postfix_train(
     spike_metric_sums: Dict[str, float],
     routing_metric_sums: Dict[str, float],
     prototype_metric_sums: Dict[str, float],
+    diag_metric_sums: Dict[str, float],
+    aux_metric_sums: Dict[str, float],
     spike_batches: int,
     routing_batches: int,
     prototype_batches: int,
+    diag_batches: int,
+    aux_batches: int,
 ) -> Dict[str, str]:
     postfix: Dict[str, str] = {
         "loss": f"{(total_loss / max(total_samples, 1)):.4f}",
@@ -456,7 +402,6 @@ def build_postfix_train(
         key_map={
             "firing_rate": "spk_rt",
             "spikes_per_token": "spk_tok",
-            "spikes_per_sample": "spk_smp",
             "exc_firing_rate": "exc_rt",
             "inh_firing_rate": "inh_rt",
             "exc_inh_diff": "exc-inh",
@@ -464,7 +409,6 @@ def build_postfix_train(
         decimals_map={
             "firing_rate": 4,
             "spikes_per_token": 2,
-            "spikes_per_sample": 2,
             "exc_firing_rate": 4,
             "inh_firing_rate": 4,
             "exc_inh_diff": 4,
@@ -482,11 +426,7 @@ def build_postfix_train(
             "dominance_fraction": "dom",
             "exc_weight_mean": "exc_w",
             "inh_weight_mean": "inh_w",
-            "exc_usage_fraction": "exc_use",
-            "inh_usage_fraction": "inh_use",
             "agreement_mean": "agree",
-            "exc_agreement_mean": "exc_ag",
-            "inh_agreement_mean": "inh_ag",
         },
         decimals_map={
             "routing_entropy": 3,
@@ -495,11 +435,7 @@ def build_postfix_train(
             "dominance_fraction": 3,
             "exc_weight_mean": 3,
             "inh_weight_mean": 3,
-            "exc_usage_fraction": 3,
-            "inh_usage_fraction": 3,
             "agreement_mean": 3,
-            "exc_agreement_mean": 3,
-            "inh_agreement_mean": 3,
         },
     )
 
@@ -508,14 +444,40 @@ def build_postfix_train(
         metric_sums=prototype_metric_sums,
         num_batches=prototype_batches,
         key_map={
-            "prototype_cosine_sim": "proto_sim",
             "prototype_cosine_distance": "proto_dist",
         },
         decimals_map={
-            "prototype_cosine_sim": 3,
             "prototype_cosine_distance": 3,
         },
     )
+
+    add_selected_metrics_to_postfix(
+        postfix=postfix,
+        metric_sums=diag_metric_sums,
+        num_batches=diag_batches,
+        key_map={
+            "exc_tau_mean": "exc_tau",
+            "inh_tau_mean": "inh_tau",
+            "exc_threshold_mean": "exc_thr",
+            "inh_threshold_mean": "inh_thr",
+            "exc_effective_threshold_mean": "exc_eff_thr",
+            "inh_effective_threshold_mean": "inh_eff_thr",
+        },
+        decimals_map={
+            "exc_tau_mean": 3,
+            "inh_tau_mean": 3,
+            "exc_threshold_mean": 3,
+            "inh_threshold_mean": 3,
+            "exc_effective_threshold_mean": 3,
+            "inh_effective_threshold_mean": 3,
+        },
+    )
+
+    if aux_batches > 0:
+        postfix["task"] = f"{aux_metric_sums['task_loss'] / aux_batches:.4f}"
+        postfix["bal"] = f"{aux_metric_sums['balance_loss'] / aux_batches:.4f}"
+        postfix["ent"] = f"{aux_metric_sums['entropy_loss'] / aux_batches:.4f}"
+        postfix["inh_u"] = f"{aux_metric_sums['inh_util_loss'] / aux_batches:.4f}"
 
     return postfix
 
@@ -523,16 +485,32 @@ def build_postfix_train(
 def build_postfix_val(
     total_loss: float,
     total_samples: int,
+    logits_buffer: List[torch.Tensor],
+    labels_buffer: List[torch.Tensor],
+    num_classes: int,
     spike_metric_sums: Dict[str, float],
     routing_metric_sums: Dict[str, float],
     prototype_metric_sums: Dict[str, float],
+    diag_metric_sums: Dict[str, float],
     spike_batches: int,
     routing_batches: int,
     prototype_batches: int,
+    diag_batches: int,
 ) -> Dict[str, str]:
     postfix: Dict[str, str] = {
         "loss": f"{(total_loss / max(total_samples, 1)):.4f}",
     }
+
+    if logits_buffer and labels_buffer:
+        logits_all = torch.cat(logits_buffer, dim=0)
+        labels_all = torch.cat(labels_buffer, dim=0)
+        cls_metrics = compute_classification_metrics_from_logits(
+            logits=logits_all,
+            labels=labels_all,
+            num_classes=num_classes,
+        )
+        postfix["acc"] = f"{cls_metrics['accuracy']:.4f}"
+        postfix["f1"] = f"{cls_metrics['f1']:.4f}"
 
     add_selected_metrics_to_postfix(
         postfix=postfix,
@@ -541,16 +519,16 @@ def build_postfix_val(
         key_map={
             "firing_rate": "spk_rt",
             "spikes_per_token": "spk_tok",
-            "spikes_per_sample": "spk_smp",
             "exc_firing_rate": "exc_rt",
             "inh_firing_rate": "inh_rt",
+            "exc_inh_diff": "exc-inh",
         },
         decimals_map={
             "firing_rate": 4,
             "spikes_per_token": 2,
-            "spikes_per_sample": 2,
             "exc_firing_rate": 4,
             "inh_firing_rate": 4,
+            "exc_inh_diff": 4,
         },
     )
 
@@ -565,8 +543,6 @@ def build_postfix_val(
             "dominance_fraction": "dom",
             "exc_weight_mean": "exc_w",
             "inh_weight_mean": "inh_w",
-            "exc_usage_fraction": "exc_use",
-            "inh_usage_fraction": "inh_use",
             "agreement_mean": "agree",
         },
         decimals_map={
@@ -576,8 +552,6 @@ def build_postfix_val(
             "dominance_fraction": 3,
             "exc_weight_mean": 3,
             "inh_weight_mean": 3,
-            "exc_usage_fraction": 3,
-            "inh_usage_fraction": 3,
             "agreement_mean": 3,
         },
     )
@@ -587,12 +561,32 @@ def build_postfix_val(
         metric_sums=prototype_metric_sums,
         num_batches=prototype_batches,
         key_map={
-            "prototype_cosine_sim": "proto_sim",
             "prototype_cosine_distance": "proto_dist",
         },
         decimals_map={
-            "prototype_cosine_sim": 3,
             "prototype_cosine_distance": 3,
+        },
+    )
+
+    add_selected_metrics_to_postfix(
+        postfix=postfix,
+        metric_sums=diag_metric_sums,
+        num_batches=diag_batches,
+        key_map={
+            "exc_tau_mean": "exc_tau",
+            "inh_tau_mean": "inh_tau",
+            "exc_threshold_mean": "exc_thr",
+            "inh_threshold_mean": "inh_thr",
+            "exc_effective_threshold_mean": "exc_eff_thr",
+            "inh_effective_threshold_mean": "inh_eff_thr",
+        },
+        decimals_map={
+            "exc_tau_mean": 3,
+            "inh_tau_mean": 3,
+            "exc_threshold_mean": 3,
+            "inh_threshold_mean": 3,
+            "exc_effective_threshold_mean": 3,
+            "inh_effective_threshold_mean": 3,
         },
     )
 
@@ -612,11 +606,10 @@ def train_one_epoch(
     total_epochs: int,
     num_classes: int,
     grad_clip_norm: Optional[float] = None,
-    # Regularization parameters (read from config)
-    lambda_balance: float = 0.5,
-    lambda_entropy: float = 0.1,
-    lambda_inh_util: float = 0.5,
-    target_inh_usage: float = 0.5,
+    lambda_balance: float = 0.05,
+    lambda_entropy: float = 0.001,
+    lambda_inh_util: float = 0.1,
+    target_inh_usage: float = 0.15,
 ) -> Dict[str, float]:
     model.train()
 
@@ -636,12 +629,13 @@ def train_one_epoch(
     spike_metric_sums: Dict[str, float] = {}
     routing_metric_sums: Dict[str, float] = {}
     prototype_metric_sums: Dict[str, float] = {}
+    diag_metric_sums: Dict[str, float] = {}
 
     spike_batches = 0
     routing_batches = 0
     prototype_batches = 0
+    diag_batches = 0
 
-    # Optional: monitor auxiliary losses
     aux_metric_sums: Dict[str, float] = {
         "task_loss": 0.0,
         "balance_loss": 0.0,
@@ -683,64 +677,45 @@ def train_one_epoch(
         grouped_current = outputs.get("grouped_current", None)
         group_assignments = outputs.get("group_assignments", None)
 
-        # ------------------------------------------------------------
-        # Main task loss
-        # ------------------------------------------------------------
         task_loss = criterion(logits, labels)
         loss = task_loss
 
-        # ------------------------------------------------------------
-        # Auxiliary regularization losses
-        # These are designed to:
-        # 1) reduce single-group routing collapse
-        # 2) preserve routing diversity
-        # 3) keep inhibitory pathway functionally active
-        # ------------------------------------------------------------
         balance_loss = torch.zeros((), device=device)
         entropy_loss = torch.zeros((), device=device)
         inh_util_loss = torch.zeros((), device=device)
 
         if routing_weights is not None:
-            # routing_weights: [B, T, 2]
+            group_mean = routing_weights.mean(dim=(0, 1))
+            target_group = torch.full_like(group_mean, 1.0 / group_mean.numel())
+            balance_loss = torch.abs(group_mean - target_group).mean()
 
-            # 1) Balance loss: discourage trivial collapse to one routing group
-            # Use absolute difference instead of squared for stronger gradient
-            group_mean = routing_weights.mean(dim=(0, 1))  # [2]
-            balance_loss = torch.abs(group_mean[0] - 0.5) + torch.abs(group_mean[1] - 0.5)
-
-            # 2) Entropy loss: encourage softer / more diverse routing
             eps = 1e-8
             routing_entropy = -(
                 routing_weights * (routing_weights + eps).log()
             ).sum(dim=-1).mean()
 
-            # We want to maximize entropy (soft assignments), so subtract it
-            # But bound it to prevent negative loss values
-            target_entropy = 0.69  # Maximum entropy for 2 classes: ln(2) ≈ 0.693
-            entropy_loss = (target_entropy - routing_entropy).abs()
+            max_entropy = torch.log(
+                torch.tensor(
+                    routing_weights.size(-1),
+                    device=device,
+                    dtype=routing_weights.dtype,
+                )
+            )
+            entropy_loss = torch.abs(max_entropy - routing_entropy)
 
             loss = loss + lambda_balance * balance_loss + lambda_entropy * entropy_loss
 
         if grouped_current is not None and group_assignments is not None:
-            # grouped_current: [B, T, H]
-            # group_assignments: [H], with 0 = excitatory, 1 = inhibitory
-
             inh_mask = (group_assignments == 1)
             if inh_mask.any():
-                inh_current = grouped_current[..., inh_mask]  # [B, T, I]
-
-                # FIXED: Encourage inhibitory pathway to be active, not zero!
-                # Previous version had -inh_strength which maximized zero current
+                inh_current = grouped_current[..., inh_mask]
                 inh_strength = inh_current.abs().mean()
-                
-                # Push inhibitory strength toward target value
-                inh_util_loss = (target_inh_usage - inh_strength).abs()
-                
-                # Alternative: use smooth L1 for robustness
-                # inh_util_loss = torch.nn.functional.smooth_l1_loss(
-                #     inh_strength, torch.tensor(target_inh_usage, device=device)
-                # )
-
+                target_tensor = torch.tensor(
+                    target_inh_usage,
+                    device=device,
+                    dtype=inh_strength.dtype,
+                )
+                inh_util_loss = torch.abs(target_tensor - inh_strength)
                 loss = loss + lambda_inh_util * inh_util_loss
 
         maybe_cuda_synchronize(device)
@@ -796,7 +771,16 @@ def train_one_epoch(
             accumulate_metric_dict(prototype_metric_sums, prototype_metrics)
             prototype_batches += 1
 
-        # log auxiliary losses
+        maybe_add_tensor_stats(diag_metric_sums, outputs, "exc_tau", "exc_tau")
+        maybe_add_tensor_stats(diag_metric_sums, outputs, "inh_tau", "inh_tau")
+        maybe_add_tensor_stats(diag_metric_sums, outputs, "exc_threshold", "exc_threshold")
+        maybe_add_tensor_stats(diag_metric_sums, outputs, "inh_threshold", "inh_threshold")
+        maybe_add_tensor_stats(diag_metric_sums, outputs, "exc_effective_threshold", "exc_effective_threshold")
+        maybe_add_tensor_stats(diag_metric_sums, outputs, "inh_effective_threshold", "inh_effective_threshold")
+        maybe_add_tensor_stats(diag_metric_sums, outputs, "exc_adaptive_threshold", "exc_adaptive_threshold")
+        maybe_add_tensor_stats(diag_metric_sums, outputs, "inh_adaptive_threshold", "inh_adaptive_threshold")
+        diag_batches += 1
+
         aux_metric_sums["task_loss"] += float(task_loss.item())
         aux_metric_sums["balance_loss"] += float(balance_loss.item())
         aux_metric_sums["entropy_loss"] += float(entropy_loss.item())
@@ -812,18 +796,14 @@ def train_one_epoch(
             spike_metric_sums=spike_metric_sums,
             routing_metric_sums=routing_metric_sums,
             prototype_metric_sums=prototype_metric_sums,
+            diag_metric_sums=diag_metric_sums,
+            aux_metric_sums=aux_metric_sums,
             spike_batches=spike_batches,
             routing_batches=routing_batches,
             prototype_batches=prototype_batches,
+            diag_batches=diag_batches,
+            aux_batches=aux_batches,
         )
-
-        # Add compact auxiliary loss display
-        if aux_batches > 0:
-            postfix["task"] = f"{aux_metric_sums['task_loss'] / aux_batches:.4f}"
-            postfix["bal"] = f"{aux_metric_sums['balance_loss'] / aux_batches:.4f}"
-            postfix["ent"] = f"{aux_metric_sums['entropy_loss'] / aux_batches:.4f}"
-            postfix["inh_u"] = f"{aux_metric_sums['inh_util_loss'] / aux_batches:.4f}"
-
         progress_bar.set_postfix(postfix)
 
     if total_samples == 0:
@@ -867,6 +847,10 @@ def train_one_epoch(
         for key, value in prototype_metric_sums.items():
             metrics[f"train_{key}"] = value / prototype_batches
 
+    if diag_batches > 0:
+        for key, value in diag_metric_sums.items():
+            metrics[f"train_{key}"] = value / diag_batches
+
     if aux_batches > 0:
         metrics["train_task_loss"] = aux_metric_sums["task_loss"] / aux_batches
         metrics["train_balance_loss"] = aux_metric_sums["balance_loss"] / aux_batches
@@ -900,10 +884,12 @@ def validate_one_epoch(
     spike_metric_sums: Dict[str, float] = {}
     routing_metric_sums: Dict[str, float] = {}
     prototype_metric_sums: Dict[str, float] = {}
+    diag_metric_sums: Dict[str, float] = {}
 
     spike_batches = 0
     routing_batches = 0
     prototype_batches = 0
+    diag_batches = 0
 
     progress_bar = tqdm(
         loader,
@@ -964,15 +950,30 @@ def validate_one_epoch(
             accumulate_metric_dict(prototype_metric_sums, prototype_metrics)
             prototype_batches += 1
 
+        maybe_add_tensor_stats(diag_metric_sums, outputs, "exc_tau", "exc_tau")
+        maybe_add_tensor_stats(diag_metric_sums, outputs, "inh_tau", "inh_tau")
+        maybe_add_tensor_stats(diag_metric_sums, outputs, "exc_threshold", "exc_threshold")
+        maybe_add_tensor_stats(diag_metric_sums, outputs, "inh_threshold", "inh_threshold")
+        maybe_add_tensor_stats(diag_metric_sums, outputs, "exc_effective_threshold", "exc_effective_threshold")
+        maybe_add_tensor_stats(diag_metric_sums, outputs, "inh_effective_threshold", "inh_effective_threshold")
+        maybe_add_tensor_stats(diag_metric_sums, outputs, "exc_adaptive_threshold", "exc_adaptive_threshold")
+        maybe_add_tensor_stats(diag_metric_sums, outputs, "inh_adaptive_threshold", "inh_adaptive_threshold")
+        diag_batches += 1
+
         postfix = build_postfix_val(
             total_loss=total_loss,
             total_samples=total_samples,
+            logits_buffer=val_logits_cpu,
+            labels_buffer=val_labels_cpu,
+            num_classes=num_classes,
             spike_metric_sums=spike_metric_sums,
             routing_metric_sums=routing_metric_sums,
             prototype_metric_sums=prototype_metric_sums,
+            diag_metric_sums=diag_metric_sums,
             spike_batches=spike_batches,
             routing_batches=routing_batches,
             prototype_batches=prototype_batches,
+            diag_batches=diag_batches,
         )
         progress_bar.set_postfix(postfix)
 
@@ -1014,6 +1015,10 @@ def validate_one_epoch(
         for key, value in prototype_metric_sums.items():
             metrics[f"val_{key}"] = value / prototype_batches
 
+    if diag_batches > 0:
+        for key, value in diag_metric_sums.items():
+            metrics[f"val_{key}"] = value / diag_batches
+
     return metrics
 
 
@@ -1054,7 +1059,8 @@ def main() -> None:
     data_cfg = _get_required_section(config, "data")
     model_cfg = _get_required_section(config, "model")
     routing_cfg = _get_required_section(config, "routing")
-    lif_cfg = _get_required_section(config, "lif")
+    lif_exc_cfg = _get_required_section(config, "lif_exc")
+    lif_inh_cfg = _get_required_section(config, "lif_inh")
     training_cfg = _get_required_section(config, "training")
 
     logging_cfg = config.get("logging", {})
@@ -1101,15 +1107,16 @@ def main() -> None:
     max_cached_shards = int(training_cfg.get("max_cached_shards", 6))
     validate_on_load = bool(training_cfg.get("validate_on_load", False))
     grad_clip_norm = training_cfg.get("grad_clip_norm", None)
-    grad_clip_norm = (
-        float(grad_clip_norm) if grad_clip_norm is not None else None
-    )
+    grad_clip_norm = float(grad_clip_norm) if grad_clip_norm is not None else None
 
-    # Read regularization parameters from config with improved defaults
-    lambda_balance = float(training_cfg.get("lambda_balance", 0.5))
-    lambda_entropy = float(training_cfg.get("lambda_entropy", 0.1))
-    lambda_inh_usage = float(training_cfg.get("lambda_inh_usage", 0.5))
-    target_inh_usage = float(training_cfg.get("target_inh_usage", 0.5))
+    lambda_balance = float(training_cfg.get("lambda_balance", 0.05))
+    lambda_entropy = float(training_cfg.get("lambda_entropy", 0.001))
+    lambda_inh_usage = float(training_cfg.get("lambda_inh_usage", 0.1))
+    target_inh_usage = float(training_cfg.get("target_inh_usage", 0.15))
+
+    early_stopping_enabled = bool(training_cfg.get("early_stopping_enabled", True))
+    early_stopping_patience = int(training_cfg.get("early_stopping_patience", 3))
+    early_stopping_min_delta = float(training_cfg.get("early_stopping_min_delta", 0.0))
 
     train_dataset, train_loader = build_dataloader(
         path=train_path,
@@ -1131,13 +1138,12 @@ def main() -> None:
         validate_on_load=validate_on_load,
     )
 
-    router = build_router(routing_type=routing_type, routing_cfg=routing_cfg)
-
     model = build_model(
         experiment_cfg=experiment_cfg,
         model_cfg=model_cfg,
-        lif_cfg=lif_cfg,
-        router=router,
+        routing_cfg=routing_cfg,
+        lif_exc_cfg=lif_exc_cfg,
+        lif_inh_cfg=lif_inh_cfg,
     ).to(device)
 
     criterion_name = str(training_cfg.get("criterion", "cross_entropy")).lower()
@@ -1183,6 +1189,13 @@ def main() -> None:
             "lambda_inh_usage": lambda_inh_usage,
             "target_inh_usage": target_inh_usage,
         },
+        "early_stopping": {
+            "enabled": early_stopping_enabled,
+            "patience": early_stopping_patience,
+            "min_delta": early_stopping_min_delta,
+            "monitor": "val_f1",
+            "mode": "max",
+        },
     }
     save_json(run_info, log_dir / "run_info.json")
 
@@ -1198,11 +1211,21 @@ def main() -> None:
     print(f"Val path       : {val_path}")
     print(f"Log dir        : {log_dir}")
     print(f"Checkpoint dir : {ckpt_paths['dir']}")
-    print(f"Regularization : balance={lambda_balance}, entropy={lambda_entropy}, inh_usage={lambda_inh_usage}")
+    print(
+        f"Regularization : balance={lambda_balance}, "
+        f"entropy={lambda_entropy}, inh_usage={lambda_inh_usage}"
+    )
+    print(
+        f"Early stopping : enabled={early_stopping_enabled}, "
+        f"patience={early_stopping_patience}, min_delta={early_stopping_min_delta}"
+    )
     print("=" * 100)
 
     best_val_f1 = float("-inf")
     best_epoch = -1
+    epochs_without_improvement = 0
+    stopped_early = False
+    stop_reason = ""
 
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(device)
@@ -1244,11 +1267,12 @@ def main() -> None:
         )
 
         current_val_f1 = val_metrics["f1"]
-        improved = current_val_f1 > best_val_f1
+        improved = current_val_f1 > (best_val_f1 + early_stopping_min_delta)
 
         if improved:
             best_val_f1 = current_val_f1
             best_epoch = epoch
+            epochs_without_improvement = 0
 
             save_checkpoint(
                 model=model,
@@ -1275,6 +1299,8 @@ def main() -> None:
                 },
                 log_dir / "best_metrics.json",
             )
+        else:
+            epochs_without_improvement += 1
 
         save_checkpoint(
             model=model,
@@ -1318,6 +1344,7 @@ def main() -> None:
             "gpu_peak_mem_mb": round(gpu_peak_mem_mb, 4),
             "best_val_f1_so_far": round(best_val_f1, 6),
             "is_best": int(improved),
+            "epochs_without_improvement": epochs_without_improvement,
         }
 
         for key, value in train_metrics.items():
@@ -1342,6 +1369,9 @@ def main() -> None:
 
         optional_summary_keys = [
             ("train_firing_rate", "train_spk_rt"),
+            ("train_exc_firing_rate", "train_exc_rt"),
+            ("train_inh_firing_rate", "train_inh_rt"),
+            ("train_exc_inh_diff", "train_exc_inh_diff"),
             ("train_spikes_per_token", "train_spk_tok"),
             ("train_routing_entropy", "train_H"),
             ("train_routing_conf_mean", "train_r_conf"),
@@ -1350,6 +1380,9 @@ def main() -> None:
             ("train_agreement_mean", "train_agree"),
             ("train_prototype_cosine_distance", "train_proto_dist"),
             ("val_firing_rate", "val_spk_rt"),
+            ("val_exc_firing_rate", "val_exc_rt"),
+            ("val_inh_firing_rate", "val_inh_rt"),
+            ("val_exc_inh_diff", "val_exc_inh_diff"),
             ("val_spikes_per_token", "val_spk_tok"),
             ("val_routing_entropy", "val_H"),
             ("val_routing_conf_mean", "val_r_conf"),
@@ -1360,17 +1393,33 @@ def main() -> None:
         ]
 
         for key, label in optional_summary_keys:
-            if key in train_metrics:
+            if key.startswith("train_") and key in train_metrics:
                 summary_parts.append(f"{label}={train_metrics[key]:.4f}")
-            elif key in val_metrics:
+            elif key.startswith("val_") and key in val_metrics:
                 summary_parts.append(f"{label}={val_metrics[key]:.4f}")
 
+        summary_parts.append(f"no_improve={epochs_without_improvement}")
         summary_parts.append(f"gpu_mem={gpu_peak_mem_mb:.1f}MB")
 
         if improved:
             summary_parts.append("<-- best")
 
         print(" | ".join(summary_parts))
+
+        if early_stopping_enabled and epochs_without_improvement >= early_stopping_patience:
+            stopped_early = True
+            stop_reason = (
+                f"Validation F1 did not improve by more than {early_stopping_min_delta} "
+                f"for {early_stopping_patience} consecutive epoch(s)."
+            )
+            print("=" * 100)
+            print("Early stopping triggered")
+            print(stop_reason)
+            print(f"Stopped at epoch   : {epoch}")
+            print(f"Best epoch         : {best_epoch}")
+            print(f"Best val_f1        : {best_val_f1:.6f}")
+            print("=" * 100)
+            break
 
     training_summary = {
         "dataset_name": dataset_name,
@@ -1382,6 +1431,8 @@ def main() -> None:
         "best_checkpoint_path": str(ckpt_paths["best"]),
         "latest_checkpoint_path": str(ckpt_paths["latest"]),
         "train_log_csv": str(log_dir / "train_log.csv"),
+        "stopped_early": stopped_early,
+        "stop_reason": stop_reason,
     }
     save_json(training_summary, log_dir / "training_summary.json")
 
@@ -1392,6 +1443,11 @@ def main() -> None:
     print(f"Best checkpoint  : {ckpt_paths['best']}")
     print(f"Latest checkpoint: {ckpt_paths['latest']}")
     print(f"Train log        : {log_dir / 'train_log.csv'}")
+    if stopped_early:
+        print("Stopped early    : yes")
+        print(f"Stop reason      : {stop_reason}")
+    else:
+        print("Stopped early    : no")
     print("=" * 100)
 
 
