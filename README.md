@@ -1,135 +1,271 @@
-# CATS: Routing-Guided Adaptive Spiking Encoder for Embedding Sequences
 
-<!-- 
-The framework is designed for extensibility at both the routing and neuron-dynamics levels. In addition to interchangeable routing modules, the spiking layer implementation is modular, allowing future work to modify neuron dynamics, choose which parameters are learnable, and introduce alternative adaptive mechanisms.
- -->
+# CATS: Context-Aware Token-to-Spike Framework for Spiking Neural Networks
 
-CATS (**C**ontext-**A**ware **T**oken-to-**S**pike) is a research-oriented framework for converting continuous embedding sequences into structured spike-based representations using **routing-guided adaptive spiking encoders**.
+CATS (**C**ontext-**A**ware **T**oken-to-**S**pike) is a modular research framework for converting **precomputed embedding sequences** into structured **spike-based representations** using routing-guided adaptive spiking encoders.
 
-The core contribution of CATS is a **modular spiking encoder** that operates on pre-computed embeddings (e.g., from Transformers), rather than on raw inputs.
-This design allows CATS to remain agnostic to tokenization, embedding backbones, and input modalities.
-
----
-
-## Motivation
-
-Contemporary neural systems increasingly depend on rich embedding representations produced by large-scale models such as Transformers.
-In contrast, most existing spiking neural network (SNN) approaches remain tightly coupled to raw sensory inputs or rely on fixed, non-adaptive spike encoding schemes, limiting flexibility and reuse.
-
-CATS addresses this gap by introducing a **routing-guided adaptive spiking encoder** that cleanly decouples:
-
-* embedding generation,
-* routing and structural organization, and
-* spike-based computation.
-
-The proposed encoder:
-
-* operates directly on arbitrary embedding sequences,
-* employs learnable routing mechanisms to regulate information flow,
-* converts embeddings into spike-based representations via adaptive neuron dynamics.
+The framework is designed for **modality-agnostic processing**, **controlled experimentation**, and **high extensibility** across routing strategies and neuron dynamics.
 
 ---
 
 ## Key Idea
 
+
 ```
-    [Any Transformer / Embedding Source]
-                ↓
-    Routing-Guided Adaptive Spiking Encoder
-                ↓
-    Spike-Based Representation / Decision
+[Any Embedding Backbone (Text / Image / Audio)]
+                    ↓
+        CARSON Routing (ANN domain)
+                    ↓
+     Learnable & Adaptive Spiking Encoder (LIF)
+                    ↓
+        Spike-Based Representation
+                    ↓
+          Classification Head (ANN domain)
 ```
 
-The encoder itself is the main contribution.
-Embedding models are treated as interchangeable input sources.
+CATS **decouples representation learning from spike encoding**, allowing researchers to study spiking behavior independently from embedding generation.
 
 ---
 
-## Core Components
+## Core Contributions
 
-### 1. Routing-Guided Encoder
+### 1. Routing-Guided Token-to-Spike Encoding
 
-CATS introduces routing mechanisms that guide how embedding activations are assigned to **functional neuron groups** before spiking computation.
+CATS introduces a **routing stage (ANN domain)** before spiking computation:
 
-Routing operates in the ANN domain and introduces a structural inductive bias prior to spike generation.
+- Assigns tokens/features to functional neuron groups
+- Learns structured information flow
+- Acts as a **structural inductive bias**
 
 ---
 
-### 2. CARSON Routing
-
-CATS includes **CARSON**:
+### 2. CARSON Routing (Primary Method)
 
 > **C**apsule-**A**ware **R**outing for **S**piking-**O**riented **N**etworks
 
-CARSON is a capsule-inspired routing mechanism enabling structured, learnable assignment of embedding dimensions or tokens to spiking neuron groups.
+CARSON is a **capsule-inspired, context-aware routing mechanism** that operates in the embedding domain prior to spiking computation.
 
-It is implemented independently of the embedding backbone and can be compared against standard routing baselines.
+Unlike classical capsule networks, CARSON does not model explicit pose transformations. Instead, it focuses on **structured token grouping and context-driven routing**, making it suitable for modality-agnostic embedding sequences.
 
----
+#### Core Mechanism
 
-### 3. Adaptive Spiking Neuron Dynamics
+CARSON performs routing in two stages:
 
-The spiking layer constitutes the core of the encoder, transforming routed embeddings into temporal spike patterns.
+##### 1. Iterative Context Routing
 
-All neurons follow a unified Leaky Integrate-and-Fire (LIF) formulation to maintain architectural consistency and controlled experimentation.
+- Computes a **global context vector** from token representations
+- Refines this context through **iterative routing**
+- Uses soft attention-like weighting over tokens
+- Produces:
+  - context vector
+  - token-level routing confidence
 
-Rather than introducing multiple neuron model families, CATS isolates the effect of learnable intrinsic parameters within a unified LIF formulation to ensure controlled and interpretable experimentation.
-
-The framework supports:
-
-Fixed-parameter LIF (static intrinsic dynamics)
-
-Learnable/adaptive-parameter LIF (e.g., learnable τ, adaptive thresholds, learnable inhibitory strength)
-
-This design enables controlled comparison between static and adaptive spike dynamics within a single neuron model class, avoiding confounding effects from changing neuron formulations.
-
-Note: Alternative neuron models (e.g., AdEx) are maintained only for extensibility and are not part of the primary experimental scope.
+This stage acts as a **routing-by-agreement analogue**, where tokens contribute to a shared representation based on relevance.
 
 ---
 
-### 4. Excitatory / Inhibitory Organization
+##### 2. Group Assignment (Excitatory / Inhibitory)
 
-The spiking encoder explicitly models excitatory and inhibitory neuron populations.
+Using:
 
-Routing determines how embedding dimensions or tokens are assigned to these subpopulations, enabling competitive and balanced spike dynamics.
+- specialized token features:
+  - excitatory features
+  - inhibitory features
+- shared context vector
+
+CARSON predicts **soft routing weights** over neuron groups:
+
+[B, T, 2] → (excitatory, inhibitory)
+
+
+This results in:
+
+- interpretable group assignments
+- structured competition between neuron populations
+- biologically-inspired routing dynamics
 
 ---
 
-## Project Structure
-> This Structure is not complete yet. After I finish the coding, I will update it. As a result, please note that this project skeleton is not entirely accurate. :)
+#### Key Properties
+
+- **Capsule-inspired**
+  - iterative refinement
+  - soft assignment
+  - group-level representation
+
+- **Context-aware**
+  - routing depends on global sequence structure
+
+- **Specialized pathways**
+  - separate excitatory and inhibitory feature projections
+
+- **Temperature-controlled routing**
+  - controls sharpness of assignments
+
+- **Residual integration**
+  - preserves original embedding information
+
+- **Masked sequence support**
+  - fully compatible with variable-length inputs
+
+---
+
+#### Output Signals
+
+CARSON produces:
+
+- `routing_weights` → soft group assignment
+- `routing_logits` → pre-softmax scores
+- `context_vector` → global representation
+- `routing_confidence` → token importance
+- `exc_features`, `inh_features`, `shared_features`
+- `routed_x` → context-enhanced embeddings
+
+---
+
+#### Baselines for Comparison
+
+- `identity` → no routing
+- `linear` → learned projection
+- `rule_based` → deterministic grouping
+
+---
+
+#### Design Philosophy
+
+> CARSON is not a full capsule network, but a **capsule-aware routing mechanism** adapted for embedding-to-spike transformation.
+
+It preserves key capsule principles:
+
+- iterative refinement  
+- soft assignment  
+- structured grouping  
+
+while remaining:
+
+- lightweight  
+- modular  
+- compatible with SNN pipelines
+
+### 3. Adaptive Spiking Neuron Dynamics (LIF)
+
+All neurons follow a **unified LIF model**, with configurable behavior:
+
+#### Supported Modes
+
+- Fixed parameters (baseline)
+- Learnable parameters:
+  - membrane time constant `τ`
+  - decay factor
+- Adaptive parameters:
+  - dynamic threshold (based on firing activity)
+
+#### Design Principle
+
+> Keep neuron model fixed → vary *parameters only*  
+→ ensures clean, reviewer-friendly ablations
+
+---
+
+### 4. Excitatory / Inhibitory Architecture
+
+CATS explicitly models:
+
+- Excitatory neurons
+- Inhibitory neurons
+
+With:
+
+- configurable ratio (`excitatory_ratio`)
+- separate LIF dynamics
+- routing-based assignment
+
+This enables:
+
+- competition
+- balance control
+- biologically-inspired dynamics
+
+---
+
+### 5. Positional Encoding (NEW)
+
+CATS supports **modular positional encoding**:
+
+- Designed for **modality-agnostic use**
+- Current support:
+  - RoPE (Rotary Positional Encoding)
+
+Key properties:
+
+- Works across text, vision, and audio embeddings
+- Fully optional (controlled via config)
+- Plug-and-play design
+
+---
+
+## Project Architecture
 
 ```
 CATS/
 │
-├── src/
-│   └── cats/
-│       ├── encoder/
-│       │   ├── core.py
-│       │   ├── routing/
-│       │   │   ├── carson.py
-│       │   │   ├── capsule_routing.py
-│       │   │   └── inhibitory.py
-│       │   └── spiking/
-│       │       ├── lif.py
-│       │       └── adex.py # Optional / future extension
-│       │
-│       └── backbones/
-│           └── transformer.py
+├── src/cats/
+│   ├── model.py                 # Main model (CATSClassifier)
+│   │
+│   ├── encoder/
+│   │   ├── core.py             # Core encoder logic
+│   │   │
+│   │   ├── routing/
+│   │   │   ├── base.py
+│   │   │   ├── identity.py
+│   │   │   ├── linear.py
+│   │   │   └── carson.py
+│   │   │
+│   │   ├── spiking/
+│   │   │   ├── base.py
+│   │   │   ├── lif.py
+│   │   │   └── params.py
+│   │   │
+│   │   └── position/
+│   │       ├── base.py
+│   │       └── rope.py
+│   │
+│   ├── heads/
+│   │   └── classifier.py
+│   │
+│   ├── data/
+│   │   ├── dataset.py
+│   │   └── collate.py
+│   │
+│   └── utils/
+│       ├── config.py
+│       ├── logger.py
+│       ├── metrics.py
+│       └── seed.py
 │
-├── configs/          # Experiment configurations
-├── scripts/          # Training & evaluation entry points
-├── experiments/      # Research experiments and analysis
-├── tests/            # Unit tests for framework components
+├── scripts/
+│   ├── train.py
+│   ├── evaluate.py
+│   ├── prepare_embeddings.py
+│   └── prepare_raw_dataset.py
+│
+├── configs/
+│   └── *.yaml                  # Experiment configs
+│
+├── experiments/
+├── logs/
+├── results/
+├── checkpoints/
+├── tests/
 │
 ├── pyproject.toml
 ├── README.md
 └── LICENSE
 
-````
+```
 
 ---
 
-## ⚙️ Configuration-Driven Design
+## Configuration-Driven Design
 
 All experiments are controlled via YAML configs.
 
@@ -165,7 +301,7 @@ position:
 
 ---
 
-## 📊 Training Pipeline
+## Training Pipeline
 
 CATS supports:
 
@@ -187,7 +323,7 @@ CATS supports:
 
 ---
 
-## 🧪 Experimental Philosophy
+## Experimental Philosophy
 
 CATS is built for **clean, reviewer-grade experimentation**:
 
@@ -208,7 +344,7 @@ CATS is built for **clean, reviewer-grade experimentation**:
 
 ---
 
-## 🎯 Design Principles
+## Design Principles
 
 ### 1. Modularity
 
@@ -222,7 +358,7 @@ Every component is replaceable:
 
 ### 2. Configurability
 
-All behaviors controlled via config → no hardcoding
+All behaviors controlled via config => no hardcoding
 
 ---
 
@@ -246,7 +382,7 @@ CATS works with:
 
 ---
 
-## 🚫 Out of Scope
+## Out of Scope
 
 CATS does NOT handle:
 
@@ -256,33 +392,35 @@ CATS does NOT handle:
 
 ---
 
-## Research Use Case
+## Research Use Cases
 
-CATS is intended for:
-
-* Studying embedding-to-spike encoding mechanisms
-* Investigating routing as a structural prior in SNNs
-* Exploring adaptive spike dynamics
-* Supporting hybrid ANN–SNN systems
-* Serving as a modular research platform for neuromorphic-inspired modeling
+* Spike encoding from embeddings
+* Routing in SNNs
+* ANN → SNN hybrid systems
+* Neuromorphic-inspired architectures
 
 ---
 
 ## Status
 
-CATS is under active research development.
-The framework prioritizes modularity, clarity, and reproducibility rather than production optimization.
+Active research project.
+
+Focus:
+
+* correctness
+* interpretability
+* reproducibility
+
+Not optimized for production.
 
 ---
 
 ## Citation
 
-A formal citation entry will be added upon publication of the associated manuscript.
+Will be added upon publication.
 
 ---
 
 ## License
 
-This project is released under the terms of the included LICENSE file.
-
----
+See LICENSE file.

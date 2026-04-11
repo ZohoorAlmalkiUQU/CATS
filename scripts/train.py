@@ -477,7 +477,7 @@ def build_postfix_train(
         postfix["task"] = f"{aux_metric_sums['task_loss'] / aux_batches:.4f}"
         postfix["bal"] = f"{aux_metric_sums['balance_loss'] / aux_batches:.4f}"
         postfix["ent"] = f"{aux_metric_sums['entropy_loss'] / aux_batches:.4f}"
-        postfix["inh_u"] = f"{aux_metric_sums['inh_util_loss'] / aux_batches:.4f}"
+
 
     return postfix
 
@@ -608,8 +608,6 @@ def train_one_epoch(
     grad_clip_norm: Optional[float] = None,
     lambda_balance: float = 0.05,
     lambda_entropy: float = 0.001,
-    lambda_inh_util: float = 0.1,
-    target_inh_usage: float = 0.15,
 ) -> Dict[str, float]:
     model.train()
 
@@ -640,7 +638,6 @@ def train_one_epoch(
         "task_loss": 0.0,
         "balance_loss": 0.0,
         "entropy_loss": 0.0,
-        "inh_util_loss": 0.0,
     }
     aux_batches = 0
 
@@ -674,15 +671,12 @@ def train_one_epoch(
 
         logits = outputs["logits"]
         routing_weights = outputs.get("routing_weights", None)
-        grouped_current = outputs.get("grouped_current", None)
-        group_assignments = outputs.get("group_assignments", None)
 
         task_loss = criterion(logits, labels)
         loss = task_loss
 
         balance_loss = torch.zeros((), device=device)
         entropy_loss = torch.zeros((), device=device)
-        inh_util_loss = torch.zeros((), device=device)
 
         if routing_weights is not None:
             group_mean = routing_weights.mean(dim=(0, 1))
@@ -703,20 +697,11 @@ def train_one_epoch(
             )
             entropy_loss = torch.abs(max_entropy - routing_entropy)
 
-            loss = loss + lambda_balance * balance_loss + lambda_entropy * entropy_loss
-
-        if grouped_current is not None and group_assignments is not None:
-            inh_mask = (group_assignments == 1)
-            if inh_mask.any():
-                inh_current = grouped_current[..., inh_mask]
-                inh_strength = inh_current.abs().mean()
-                target_tensor = torch.tensor(
-                    target_inh_usage,
-                    device=device,
-                    dtype=inh_strength.dtype,
-                )
-                inh_util_loss = torch.abs(target_tensor - inh_strength)
-                loss = loss + lambda_inh_util * inh_util_loss
+            loss = (
+                loss
+                + lambda_balance * balance_loss
+                + lambda_entropy * entropy_loss
+            )
 
         maybe_cuda_synchronize(device)
         t2 = time.perf_counter()
@@ -746,6 +731,8 @@ def train_one_epoch(
         append_cpu_tensors(train_labels_cpu, labels)
 
         spikes = outputs.get("spikes", None)
+        group_assignments = outputs.get("group_assignments", None)
+
         if spikes is not None:
             spike_metrics = compute_spike_metrics(
                 spikes=spikes,
@@ -784,7 +771,6 @@ def train_one_epoch(
         aux_metric_sums["task_loss"] += float(task_loss.item())
         aux_metric_sums["balance_loss"] += float(balance_loss.item())
         aux_metric_sums["entropy_loss"] += float(entropy_loss.item())
-        aux_metric_sums["inh_util_loss"] += float(inh_util_loss.item())
         aux_batches += 1
 
         postfix = build_postfix_train(
@@ -855,10 +841,8 @@ def train_one_epoch(
         metrics["train_task_loss"] = aux_metric_sums["task_loss"] / aux_batches
         metrics["train_balance_loss"] = aux_metric_sums["balance_loss"] / aux_batches
         metrics["train_entropy_loss"] = aux_metric_sums["entropy_loss"] / aux_batches
-        metrics["train_inh_util_loss"] = aux_metric_sums["inh_util_loss"] / aux_batches
 
     return metrics
-
 
 @torch.no_grad()
 def validate_one_epoch(
@@ -1246,8 +1230,6 @@ def main() -> None:
             grad_clip_norm=grad_clip_norm,
             lambda_balance=lambda_balance,
             lambda_entropy=lambda_entropy,
-            lambda_inh_util=lambda_inh_usage,
-            target_inh_usage=target_inh_usage,
         )
 
         val_metrics = validate_one_epoch(
