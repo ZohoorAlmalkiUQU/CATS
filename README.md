@@ -122,51 +122,137 @@ CATS/
 ├── tests/            # Unit tests for framework components
 │
 ├── pyproject.toml
-├── LICENSE
-└── README.md
-```
+├── README.md
+└── LICENSE
 
-### Directory Responsibilities
-
-* `src/cats/` — Core framework implementation
-* `configs/` — Reproducible experiment configurations
-* `scripts/` — Training and evaluation entry points
-* `experiments/` — Research experiments, ablations, and analysis
-* `tests/` — Unit tests ensuring framework stability
-
-This structure cleanly separates reusable components from research-specific experimentation.
+````
 
 ---
 
-## Scope and Responsibility
+## ⚙️ Configuration-Driven Design
 
-### CATS is responsible for:
+All experiments are controlled via YAML configs.
 
-* Structured embedding-to-spike transformation
-* Routing mechanisms and grouping strategies
-* Excitatory/Inhibitory assignment
-* Adaptive spiking neuron dynamics
-* Supporting controlled ablation studies
+Example:
 
-### CATS is *not* responsible for:
+```yaml
+model:
+  embedding_dim: 768
+  hidden_dim: 256
+  num_classes: 2
+  excitatory_ratio: 0.5
 
-* Tokenization strategies
-* Training of embedding backbones
-* Intrinsic quality of embeddings
+routing:
+  type: carson
+  kwargs:
+    num_groups: 2
+    num_iterations: 3
+    temperature: 1.0
 
-This separation ensures fair evaluation and avoids confounding architectural factors.
+lif_exc:
+  tau:
+    learnable: true
+    mode: shared
+
+lif_inh:
+  tau:
+    learnable: true
+
+position:
+  type: rope
+  enabled: true
+````
 
 ---
 
-## Experimental Design Philosophy
+## 📊 Training Pipeline
 
-CATS is built to support systematic experimentation, including:
+CATS supports:
 
-* Fixed vs learnable/adaptive LIF parameters
-* CARSON vs routing baselines
-* No routing vs structured routing
+* Full training / validation / test loops
+* Metrics:
 
-Configurations are defined under `configs/`, enabling reproducible research workflows.
+  * Accuracy
+  * Precision / Recall
+  * F1-score
+* Spiking metrics:
+
+  * firing rate
+  * spikes per token
+* Routing diagnostics:
+
+  * entropy
+  * dominance
+  * confidence
+
+---
+
+## 🧪 Experimental Philosophy
+
+CATS is built for **clean, reviewer-grade experimentation**:
+
+### Supported Studies
+
+* Routing:
+
+  * CARSON vs Linear vs Identity
+* Spiking:
+
+  * Fixed vs Learnable vs Adaptive LIF
+* Structure:
+
+  * With vs Without positional encoding
+* Biology-inspired:
+
+  * Excitatory / Inhibitory balance
+
+---
+
+## 🎯 Design Principles
+
+### 1. Modularity
+
+Every component is replaceable:
+
+* routing
+* neuron dynamics
+* positional encoding
+
+---
+
+### 2. Configurability
+
+All behaviors controlled via config → no hardcoding
+
+---
+
+### 3. Extensibility
+
+You can easily add:
+
+* new routing algorithm
+* new neuron model
+* new encoding strategy
+
+---
+
+### 4. Modality-Agnostic
+
+CATS works with:
+
+* text embeddings (BERT)
+* image embeddings (ViT)
+* audio embeddings
+
+---
+
+## 🚫 Out of Scope
+
+CATS does NOT handle:
+
+* raw data preprocessing
+* tokenization
+* training embedding backbones
 
 ---
 
