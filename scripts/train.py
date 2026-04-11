@@ -1095,8 +1095,6 @@ def main() -> None:
 
     lambda_balance = float(training_cfg.get("lambda_balance", 0.05))
     lambda_entropy = float(training_cfg.get("lambda_entropy", 0.001))
-    lambda_inh_usage = float(training_cfg.get("lambda_inh_usage", 0.1))
-    target_inh_usage = float(training_cfg.get("target_inh_usage", 0.15))
 
     early_stopping_enabled = bool(training_cfg.get("early_stopping_enabled", True))
     early_stopping_patience = int(training_cfg.get("early_stopping_patience", 3))
@@ -1170,8 +1168,6 @@ def main() -> None:
         "regularization": {
             "lambda_balance": lambda_balance,
             "lambda_entropy": lambda_entropy,
-            "lambda_inh_usage": lambda_inh_usage,
-            "target_inh_usage": target_inh_usage,
         },
         "early_stopping": {
             "enabled": early_stopping_enabled,
@@ -1197,7 +1193,7 @@ def main() -> None:
     print(f"Checkpoint dir : {ckpt_paths['dir']}")
     print(
         f"Regularization : balance={lambda_balance}, "
-        f"entropy={lambda_entropy}, inh_usage={lambda_inh_usage}"
+        f"entropy={lambda_entropy}"
     )
     print(
         f"Early stopping : enabled={early_stopping_enabled}, "

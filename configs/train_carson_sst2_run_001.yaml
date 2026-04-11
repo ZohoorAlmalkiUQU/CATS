@@ -2,7 +2,7 @@ experiment:
   dataset_name: sst2
   model_name: cats
   routing_type: carson
-  run_name: run_002
+  run_name: run_001
   seed: 42
 
 data:
