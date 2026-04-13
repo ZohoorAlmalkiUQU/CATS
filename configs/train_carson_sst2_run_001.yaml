@@ -23,6 +23,12 @@ model:
   num_groups: 2
   kwargs: {}
 
+position:
+  use: true
+  type: rope
+  kwargs:
+    base: 10000.0
+
 routing:
   kwargs:
     embedding_dim: 768

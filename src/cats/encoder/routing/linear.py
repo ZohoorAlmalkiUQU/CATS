@@ -60,6 +60,7 @@ class LinearRouter(BaseRouter):
                 "routing_logits": [B, T, G]
             }
         """
+        x = self.apply_positional_encoding(x, attention_mask)
         x_in = self.norm(x)
         x_in = self.dropout(x_in)
 

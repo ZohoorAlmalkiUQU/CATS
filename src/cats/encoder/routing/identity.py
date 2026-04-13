@@ -28,6 +28,7 @@ class IdentityRouter(BaseRouter):
         attention_mask: Optional[torch.Tensor] = None,
         **kwargs: Any,
     ) -> Dict[str, torch.Tensor]:
+        x = self.apply_positional_encoding(x, attention_mask)
         batch_size, seq_len, _ = x.shape
         routing_weights = x.new_full(
             (batch_size, seq_len, self.num_groups),

@@ -1046,6 +1046,7 @@ def main() -> None:
     lif_exc_cfg = _get_required_section(config, "lif_exc")
     lif_inh_cfg = _get_required_section(config, "lif_inh")
     training_cfg = _get_required_section(config, "training")
+    position_cfg = config.get("position", {})
 
     logging_cfg = config.get("logging", {})
     checkpoint_cfg = config.get("checkpoints", {})
@@ -1126,6 +1127,7 @@ def main() -> None:
         routing_cfg=routing_cfg,
         lif_exc_cfg=lif_exc_cfg,
         lif_inh_cfg=lif_inh_cfg,
+        position_cfg=position_cfg, 
     ).to(device)
 
     criterion_name = str(training_cfg.get("criterion", "cross_entropy")).lower()

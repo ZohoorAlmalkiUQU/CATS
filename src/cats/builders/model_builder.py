@@ -10,6 +10,7 @@ from cats.encoder.spiking.lif import LIFLayer
 from cats.encoder.routing.identity import IdentityRouter
 from cats.encoder.routing.linear import LinearRouter
 from cats.encoder.routing.carson import CARSONRouter
+from cats.builders.build_positional_encoding import build_positional_encoding
 
 
 MODEL_REGISTRY = {
@@ -42,6 +43,7 @@ def import_from_string(path: str):
 def build_router(
     routing_type: str,
     routing_cfg: Dict[str, Any],
+    position_cfg: Dict[str, Any] | None,
     *,
     embedding_dim: int,
     hidden_dim: int,
@@ -52,6 +54,10 @@ def build_router(
 
     The builder injects common model-level dimensions automatically
     unless user overrides them explicitly in routing.kwargs.
+
+    Positional encoding is also built once here and passed into the router
+    so that all routers can use the same positional encoding mechanism
+    under matched experimental settings.
     """
     if routing_type not in ROUTER_REGISTRY:
         raise ValueError(
@@ -62,9 +68,17 @@ def build_router(
     RouterClass = ROUTER_REGISTRY[routing_type]
     kwargs = dict(routing_cfg.get("kwargs", {}) or {})
 
+    pos_enc, use_pos_enc = build_positional_encoding(
+        embedding_dim=embedding_dim,
+        position_cfg=position_cfg,
+    )
+
     kwargs.setdefault("embedding_dim", embedding_dim)
     kwargs.setdefault("hidden_dim", hidden_dim)
     kwargs.setdefault("num_groups", num_groups)
+
+    kwargs.setdefault("pos_enc", pos_enc)
+    kwargs.setdefault("use_pos_enc", use_pos_enc)
 
     return RouterClass(**kwargs)
 
@@ -99,6 +113,7 @@ def build_model(
     lif_exc_cfg: Dict[str, Any],
     lif_inh_cfg: Dict[str, Any],
     classifier_cfg: Dict[str, Any] | None = None,
+    position_cfg: Dict[str, Any] | None = None,
 ) -> nn.Module:
     """
     Build the full model from config.
@@ -145,6 +160,7 @@ def build_model(
     router = build_router(
         routing_type=routing_type,
         routing_cfg=routing_cfg,
+        position_cfg=position_cfg,
         embedding_dim=embedding_dim,
         hidden_dim=hidden_dim,
         num_groups=num_groups,

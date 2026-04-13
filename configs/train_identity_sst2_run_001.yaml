@@ -26,6 +26,12 @@ model:
 routing:
   kwargs: {}
 
+position:
+  use: true
+  type: rope
+  kwargs:
+    base: 10000.0
+
 lif_exc:
   num_groups: 1
   reset_to_zero: true
