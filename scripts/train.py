@@ -42,6 +42,11 @@ def parse_args() -> argparse.Namespace:
         required=True,
         help="Path to YAML config file",
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume training from latest checkpoint if available.",
+    )
     return parser.parse_args()
 
 
@@ -100,6 +105,162 @@ class CSVLogger:
                 writer.writeheader()
                 self._header_written = True
             writer.writerow(row)
+
+
+# ============================================================
+# Resume helpers
+# ============================================================
+def load_resume_state_from_csv(csv_path: Path) -> Dict[str, Any]:
+    """
+    Read training progress state from train_log.csv if it exists.
+    Returns defaults when the CSV is missing or empty.
+    """
+    state = {
+        "last_epoch": 0,
+        "best_epoch": -1,
+        "best_val_f1": float("-inf"),
+        "epochs_without_improvement": 0,
+    }
+
+    if not csv_path.exists() or csv_path.stat().st_size == 0:
+        return state
+
+    with csv_path.open("r", newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+
+    if not rows:
+        return state
+
+    def _to_int(x: Any, default: int = 0) -> int:
+        try:
+            return int(float(x))
+        except (TypeError, ValueError):
+            return default
+
+    def _to_float(x: Any, default: float = 0.0) -> float:
+        try:
+            return float(x)
+        except (TypeError, ValueError):
+            return default
+
+    last_row = rows[-1]
+
+    state["last_epoch"] = _to_int(last_row.get("epoch", 0), 0)
+    state["epochs_without_improvement"] = _to_int(
+        last_row.get("epochs_without_improvement", 0), 0
+    )
+    state["best_val_f1"] = _to_float(
+        last_row.get("best_val_f1_so_far", float("-inf")),
+        float("-inf"),
+    )
+
+    best_epoch = -1
+    best_val_f1 = float("-inf")
+
+    for row in rows:
+        row_epoch = _to_int(row.get("epoch", 0), 0)
+        row_best_flag = _to_int(row.get("is_best", 0), 0)
+        row_best_val = _to_float(
+            row.get("best_val_f1_so_far", float("-inf")),
+            float("-inf"),
+        )
+
+        if row_best_val > best_val_f1:
+            best_val_f1 = row_best_val
+
+        if row_best_flag == 1:
+            best_epoch = row_epoch
+
+    if best_epoch == -1:
+        best_row = None
+        best_row_val_f1 = float("-inf")
+        for row in rows:
+            row_val_f1 = _to_float(row.get("val_f1", float("-inf")), float("-inf"))
+            if row_val_f1 > best_row_val_f1:
+                best_row_val_f1 = row_val_f1
+                best_row = row
+
+        if best_row is not None:
+            best_epoch = _to_int(best_row.get("epoch", -1), -1)
+
+    state["best_epoch"] = best_epoch
+    state["best_val_f1"] = best_val_f1
+
+    return state
+
+
+def maybe_resume_training(
+    resume: bool,
+    latest_ckpt_path: Path,
+    csv_path: Path,
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    device: torch.device,
+) -> Dict[str, Any]:
+    """
+    Resume training state from latest checkpoint and train_log.csv.
+    Checkpoint is the primary source for model/optimizer/last epoch.
+    CSV is used to restore best_epoch and epochs_without_improvement.
+    """
+    state = {
+        "start_epoch": 1,
+        "best_val_f1": float("-inf"),
+        "best_epoch": -1,
+        "epochs_without_improvement": 0,
+        "resumed": False,
+    }
+
+    if not resume:
+        return state
+
+    if not latest_ckpt_path.exists():
+        print(f"[Resume] No latest checkpoint found at: {latest_ckpt_path}")
+        print("[Resume] Starting a fresh run.")
+        return state
+
+    checkpoint = torch.load(latest_ckpt_path, map_location=device)
+
+    model.load_state_dict(checkpoint["model_state_dict"])
+    optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+
+    ckpt_epoch = int(checkpoint.get("epoch", 0))
+    ckpt_best_val_f1 = float(checkpoint.get("best_val_f1", float("-inf")))
+    ckpt_best_epoch = int(checkpoint.get("best_epoch", -1))
+    ckpt_epochs_without_improvement = int(
+        checkpoint.get("epochs_without_improvement", 0)
+    )
+
+    csv_state = load_resume_state_from_csv(csv_path)
+
+    best_epoch = ckpt_best_epoch
+    if csv_state["best_epoch"] > best_epoch:
+        best_epoch = csv_state["best_epoch"]
+
+    best_val_f1 = max(ckpt_best_val_f1, csv_state["best_val_f1"])
+
+    epochs_without_improvement = max(
+        ckpt_epochs_without_improvement,
+        csv_state["epochs_without_improvement"],
+    )
+
+    state["start_epoch"] = ckpt_epoch + 1
+    state["best_val_f1"] = best_val_f1
+    state["best_epoch"] = best_epoch
+    state["epochs_without_improvement"] = epochs_without_improvement
+    state["resumed"] = True
+
+    print("=" * 100)
+    print("Resume mode enabled")
+    print(f"Loaded checkpoint   : {latest_ckpt_path}")
+    print(f"Last saved epoch    : {ckpt_epoch}")
+    print(f"Next start epoch    : {state['start_epoch']}")
+    print(f"Best val_f1 so far  : {state['best_val_f1']:.6f}")
+    print(f"Best epoch so far   : {state['best_epoch']}")
+    print(f"Epochs w/o improve  : {state['epochs_without_improvement']}")
+    print("=" * 100)
+
+    return state
 
 
 # ============================================================
@@ -478,7 +639,6 @@ def build_postfix_train(
         postfix["bal"] = f"{aux_metric_sums['balance_loss'] / aux_batches:.4f}"
         postfix["ent"] = f"{aux_metric_sums['entropy_loss'] / aux_batches:.4f}"
 
-
     return postfix
 
 
@@ -844,6 +1004,7 @@ def train_one_epoch(
 
     return metrics
 
+
 @torch.no_grad()
 def validate_one_epoch(
     model: nn.Module,
@@ -1014,6 +1175,8 @@ def save_checkpoint(
     optimizer: torch.optim.Optimizer,
     epoch: int,
     best_val_f1: float,
+    best_epoch: int,
+    epochs_without_improvement: int,
     metrics: Dict[str, Any],
     config: Dict[str, Any],
     path: Path,
@@ -1023,6 +1186,8 @@ def save_checkpoint(
         {
             "epoch": epoch,
             "best_val_f1": best_val_f1,
+            "best_epoch": best_epoch,
+            "epochs_without_improvement": epochs_without_improvement,
             "metrics": metrics,
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
@@ -1127,7 +1292,7 @@ def main() -> None:
         routing_cfg=routing_cfg,
         lif_exc_cfg=lif_exc_cfg,
         lif_inh_cfg=lif_inh_cfg,
-        position_cfg=position_cfg, 
+        position_cfg=position_cfg,
     ).to(device)
 
     criterion_name = str(training_cfg.get("criterion", "cross_entropy")).lower()
@@ -1178,6 +1343,7 @@ def main() -> None:
             "monitor": "val_f1",
             "mode": "max",
         },
+        "resume_enabled": bool(args.resume),
     }
     save_json(run_info, log_dir / "run_info.json")
 
@@ -1201,18 +1367,39 @@ def main() -> None:
         f"Early stopping : enabled={early_stopping_enabled}, "
         f"patience={early_stopping_patience}, min_delta={early_stopping_min_delta}"
     )
+    print(f"Resume         : {args.resume}")
     print("=" * 100)
 
-    best_val_f1 = float("-inf")
-    best_epoch = -1
-    epochs_without_improvement = 0
+    resume_state = maybe_resume_training(
+        resume=args.resume,
+        latest_ckpt_path=ckpt_paths["latest"],
+        csv_path=log_dir / "train_log.csv",
+        model=model,
+        optimizer=optimizer,
+        device=device,
+    )
+
+    start_epoch = resume_state["start_epoch"]
+    best_val_f1 = resume_state["best_val_f1"]
+    best_epoch = resume_state["best_epoch"]
+    epochs_without_improvement = resume_state["epochs_without_improvement"]
+
     stopped_early = False
     stop_reason = ""
+
+    if start_epoch > epochs:
+        print("=" * 100)
+        print("Nothing to resume")
+        print(f"Configured epochs : {epochs}")
+        print(f"Checkpoint epoch  : {start_epoch - 1}")
+        print("Training already reached or exceeded the configured total epochs.")
+        print("=" * 100)
+        return
 
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(device)
 
-    for epoch in range(1, epochs + 1):
+    for epoch in range(start_epoch, epochs + 1):
         if device.type == "cuda":
             torch.cuda.reset_peak_memory_stats(device)
 
@@ -1259,6 +1446,8 @@ def main() -> None:
                 optimizer=optimizer,
                 epoch=epoch,
                 best_val_f1=best_val_f1,
+                best_epoch=best_epoch,
+                epochs_without_improvement=epochs_without_improvement,
                 metrics={
                     "train": train_metrics,
                     "val": val_metrics,
@@ -1287,6 +1476,8 @@ def main() -> None:
             optimizer=optimizer,
             epoch=epoch,
             best_val_f1=best_val_f1,
+            best_epoch=best_epoch,
+            epochs_without_improvement=epochs_without_improvement,
             metrics={
                 "train": train_metrics,
                 "val": val_metrics,
@@ -1413,6 +1604,8 @@ def main() -> None:
         "train_log_csv": str(log_dir / "train_log.csv"),
         "stopped_early": stopped_early,
         "stop_reason": stop_reason,
+        "resume_enabled": bool(args.resume),
+        "start_epoch_used": start_epoch,
     }
     save_json(training_summary, log_dir / "training_summary.json")
 
