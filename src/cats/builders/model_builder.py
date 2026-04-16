@@ -105,7 +105,6 @@ def build_lif_module(
         detach_reset=bool(lif_cfg.get("detach_reset", False)),
     )
 
-
 def build_model(
     experiment_cfg: Dict[str, Any],
     model_cfg: Dict[str, Any],
@@ -115,9 +114,6 @@ def build_model(
     classifier_cfg: Dict[str, Any] | None = None,
     position_cfg: Dict[str, Any] | None = None,
 ) -> nn.Module:
-    """
-    Build the full model from config.
-    """
     classifier_cfg = classifier_cfg or {}
 
     model_name = experiment_cfg["model_name"]
@@ -140,22 +136,31 @@ def build_model(
     excitatory_ratio = float(model_cfg.get("excitatory_ratio", 0.5))
     num_groups = int(model_cfg.get("num_groups", 2))
 
-    if not (0.0 < excitatory_ratio < 1.0):
-        raise ValueError(
-            f"excitatory_ratio must be in (0, 1), got {excitatory_ratio}"
-        )
-
-    exc_dim = max(1, int(round(hidden_dim * excitatory_ratio)))
-    inh_dim = hidden_dim - exc_dim
-
-    if inh_dim <= 0:
-        raise ValueError(
-            f"Invalid split: hidden_dim={hidden_dim}, "
-            f"excitatory_ratio={excitatory_ratio}, "
-            f"exc_dim={exc_dim}, inh_dim={inh_dim}"
-        )
-
     model_kwargs = dict(model_cfg.get("kwargs", {}) or {})
+    inhibition_cfg = dict(model_cfg.get("inhibition", {}) or {})
+    spiking_cfg = dict(model_cfg.get("spiking", {}) or {})
+
+    inhibition_enabled = bool(inhibition_cfg.get("enabled", True))
+    spiking_enabled = bool(spiking_cfg.get("enabled", True))
+
+    if inhibition_enabled:
+        if not (0.0 < excitatory_ratio < 1.0):
+            raise ValueError(
+                f"excitatory_ratio must be in (0, 1), got {excitatory_ratio}"
+            )
+
+        exc_dim = max(1, int(round(hidden_dim * excitatory_ratio)))
+        inh_dim = hidden_dim - exc_dim
+
+        if inh_dim <= 0:
+            raise ValueError(
+                f"Invalid split: hidden_dim={hidden_dim}, "
+                f"excitatory_ratio={excitatory_ratio}, "
+                f"exc_dim={exc_dim}, inh_dim={inh_dim}"
+            )
+    else:
+        exc_dim = hidden_dim
+        inh_dim = 0
 
     router = build_router(
         routing_type=routing_type,
@@ -166,18 +171,19 @@ def build_model(
         num_groups=num_groups,
     )
 
-    # Each branch-specific LIF must match its own branch dimensionality.
-    # Since lif_exc and lif_inh are separate populations, num_groups=1 is correct.
     lif_exc = build_lif_module(
         lif_exc_cfg,
         hidden_dim=exc_dim,
         num_groups=1,
     )
-    lif_inh = build_lif_module(
-        lif_inh_cfg,
-        hidden_dim=inh_dim,
-        num_groups=1,
-    )
+
+    lif_inh = None
+    if inhibition_enabled:
+        lif_inh = build_lif_module(
+            lif_inh_cfg,
+            hidden_dim=inh_dim,
+            num_groups=1,
+        )
 
     classifier_kwargs = dict(classifier_cfg.get("kwargs", {}) or {})
 
@@ -191,6 +197,8 @@ def build_model(
         lif_exc=lif_exc,
         lif_inh=lif_inh,
         classifier_cfg=classifier_cfg,
+        inhibition_enabled=inhibition_enabled,
+        spiking_enabled=spiking_enabled,
         **classifier_kwargs,
         **model_kwargs,
     )

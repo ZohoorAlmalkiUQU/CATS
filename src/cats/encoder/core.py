@@ -4,19 +4,70 @@ from typing import Dict, Optional
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+
+
+class SignedLinear(nn.Module):
+    """
+    Linear layer with sign-constrained weights.
+
+    - sign="positive" -> weights >= 0
+    - sign="negative" -> weights <= 0
+
+    The constraint is applied to weights only.
+    Bias remains unconstrained by design.
+    """
+
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        sign: str,
+        bias: bool = True,
+    ) -> None:
+        super().__init__()
+
+        if sign not in {"positive", "negative"}:
+            raise ValueError(
+                f"sign must be 'positive' or 'negative', got {sign}"
+            )
+
+        self.in_features = int(in_features)
+        self.out_features = int(out_features)
+        self.sign = sign
+
+        self.raw_weight = nn.Parameter(
+            torch.empty(self.out_features, self.in_features)
+        )
+
+        if bias:
+            self.bias = nn.Parameter(torch.zeros(self.out_features))
+        else:
+            self.bias = None
+
+        nn.init.xavier_uniform_(self.raw_weight)
+
+    @property
+    def weight(self) -> torch.Tensor:
+        magnitude = F.softplus(self.raw_weight)
+        if self.sign == "positive":
+            return magnitude
+        return -magnitude
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return F.linear(x, self.weight, self.bias)
 
 
 class CATSEncoder(nn.Module):
     """
     Context-Aware Token-to-Spike encoder.
 
-    Pipeline:
-        1) Normalize input embeddings
-        2) Route tokens with the selected router
-        3) Build shared / excitatory / inhibitory features
-        4) Convert currents into spikes with separate LIF modules
-        5) Pool excitatory / inhibitory representations
-        6) Return a rich dictionary for classification + metrics/logging
+    Supports:
+    - inhibitory branch on/off
+    - spiking branch on/off
+    - sign-constrained projections:
+        * excitatory weights >= 0
+        * inhibitory weights <= 0
     """
 
     def __init__(
@@ -27,56 +78,68 @@ class CATSEncoder(nn.Module):
         num_groups: int,
         router: nn.Module,
         lif_exc: nn.Module,
-        lif_inh: nn.Module,
+        lif_inh: nn.Module | None,
+        inhibition_enabled: bool = True,
+        spiking_enabled: bool = True,
         use_input_layernorm: bool = True,
         use_shared_projection: bool = True,
         dropout: float = 0.0,
     ) -> None:
         super().__init__()
 
-        if hidden_dim <= 1:
-            raise ValueError(f"hidden_dim must be > 1, got {hidden_dim}")
-
-        if not (0.0 < excitatory_ratio < 1.0):
-            raise ValueError(
-                f"excitatory_ratio must be in (0, 1), got {excitatory_ratio}"
-            )
+        if hidden_dim <= 0:
+            raise ValueError(f"hidden_dim must be > 0, got {hidden_dim}")
 
         self.embedding_dim = int(embedding_dim)
         self.hidden_dim = int(hidden_dim)
         self.excitatory_ratio = float(excitatory_ratio)
+        self.inhibition_enabled = bool(inhibition_enabled)
+        self.spiking_enabled = bool(spiking_enabled)
 
         self.num_groups = int(num_groups)
-        if self.num_groups < 2:
+        if self.num_groups < 1:
             raise ValueError(
-                f"CATSEncoder currently expects num_groups >= 2, got {self.num_groups}"
+                f"num_groups must be >= 1, got {self.num_groups}"
             )
 
-        self.exc_dim = max(1, int(round(hidden_dim * excitatory_ratio)))
-        self.inh_dim = hidden_dim - self.exc_dim
+        if self.inhibition_enabled:
+            if not (0.0 < excitatory_ratio < 1.0):
+                raise ValueError(
+                    f"excitatory_ratio must be in (0, 1), got {excitatory_ratio}"
+                )
 
-        if self.inh_dim <= 0:
-            raise ValueError(
-                f"Invalid split: exc_dim={self.exc_dim}, inh_dim={self.inh_dim}. "
-                f"Adjust hidden_dim or excitatory_ratio."
-            )
+            self.exc_dim = max(1, int(round(hidden_dim * excitatory_ratio)))
+            self.inh_dim = hidden_dim - self.exc_dim
+
+            if self.inh_dim <= 0:
+                raise ValueError(
+                    f"Invalid split: exc_dim={self.exc_dim}, inh_dim={self.inh_dim}. "
+                    f"Adjust hidden_dim or excitatory_ratio."
+                )
+        else:
+            self.exc_dim = hidden_dim
+            self.inh_dim = 0
 
         self.router = router
         self.lif_exc = lif_exc
         self.lif_inh = lif_inh
 
-        # Strong safety check: each branch LIF must match its branch dimension.
         if getattr(self.lif_exc, "hidden_dim", None) != self.exc_dim:
             raise ValueError(
                 f"lif_exc.hidden_dim must equal exc_dim={self.exc_dim}, "
                 f"got {getattr(self.lif_exc, 'hidden_dim', None)}"
             )
 
-        if getattr(self.lif_inh, "hidden_dim", None) != self.inh_dim:
-            raise ValueError(
-                f"lif_inh.hidden_dim must equal inh_dim={self.inh_dim}, "
-                f"got {getattr(self.lif_inh, 'hidden_dim', None)}"
-            )
+        if self.inhibition_enabled:
+            if self.lif_inh is None:
+                raise ValueError(
+                    "lif_inh must be provided when inhibition is enabled"
+                )
+            if getattr(self.lif_inh, "hidden_dim", None) != self.inh_dim:
+                raise ValueError(
+                    f"lif_inh.hidden_dim must equal inh_dim={self.inh_dim}, "
+                    f"got {getattr(self.lif_inh, 'hidden_dim', None)}"
+                )
 
         self.input_norm = (
             nn.LayerNorm(embedding_dim) if use_input_layernorm else nn.Identity()
@@ -90,17 +153,28 @@ class CATSEncoder(nn.Module):
         else:
             self.shared_proj = None
 
-        self.exc_proj = nn.Linear(embedding_dim, self.exc_dim)
-        self.inh_proj = nn.Linear(embedding_dim, self.inh_dim)
+        self.exc_proj = SignedLinear(
+            embedding_dim,
+            self.exc_dim,
+            sign="positive",
+            bias=True,
+        )
+
+        if self.inhibition_enabled:
+            self.inh_proj = SignedLinear(
+                embedding_dim,
+                self.inh_dim,
+                sign="negative",
+                bias=True,
+            )
+        else:
+            self.inh_proj = None
 
     def _build_mask(
         self,
         x: torch.Tensor,
         attention_mask: Optional[torch.Tensor],
     ) -> torch.Tensor:
-        """
-        Returns mask shaped [B, T, 1] with same dtype/device as x.
-        """
         bsz, seq_len, _ = x.shape
 
         if attention_mask is None:
@@ -123,23 +197,13 @@ class CATSEncoder(nn.Module):
         x: torch.Tensor,
         attention_mask: Optional[torch.Tensor],
     ) -> torch.Tensor:
-        """
-        Masked mean pooling over the time dimension.
-
-        Args:
-            x: [B, T, D]
-            attention_mask: [B, T] or None
-
-        Returns:
-            pooled: [B, D]
-        """
         if x.ndim != 3:
             raise ValueError(f"x must be [B, T, D], got shape {tuple(x.shape)}")
 
         if attention_mask is None:
             return x.mean(dim=1)
 
-        mask = self._build_mask(x, attention_mask)  # [B, T, 1]
+        mask = self._build_mask(x, attention_mask)
         summed = (x * mask).sum(dim=1)
         denom = mask.sum(dim=1).clamp_min(1.0)
         return summed / denom
@@ -149,9 +213,6 @@ class CATSEncoder(nn.Module):
         routing_out: Dict[str, torch.Tensor],
         fallback_x: torch.Tensor,
     ) -> torch.Tensor:
-        """
-        Accept several possible router output names for routed embeddings.
-        """
         for key in ("routed_embeddings", "routed_x", "output", "x"):
             value = routing_out.get(key, None)
             if value is not None:
@@ -162,31 +223,32 @@ class CATSEncoder(nn.Module):
         self,
         routing_out: Dict[str, torch.Tensor],
     ) -> Optional[torch.Tensor]:
-        """
-        Accept several possible router output names for routing weights.
-        """
         for key in ("routing_weights", "weights", "scores"):
             value = routing_out.get(key, None)
             if value is not None:
                 return value
         return None
 
+    def _validate_lif_output(
+        self,
+        lif_out: Dict[str, torch.Tensor],
+        name: str,
+    ) -> None:
+        if not isinstance(lif_out, dict):
+            raise TypeError(
+                f"{name} must return a dict, got {type(lif_out).__name__}"
+            )
+
+        required_lif_keys = ("spikes", "membrane", "beta", "tau", "threshold")
+        for key in required_lif_keys:
+            if key not in lif_out:
+                raise KeyError(f"{name} output is missing required key: '{key}'")
+
     def forward(
         self,
         x: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
-        """
-        Args:
-            x: [B, T, embedding_dim]
-            attention_mask: [B, T] or None
-
-        Returns:
-            Rich dictionary used by:
-            - model.py
-            - train.py
-            - metrics.py
-        """
         if x.ndim != 3:
             raise ValueError(f"x must be [B, T, D], got shape {tuple(x.shape)}")
 
@@ -224,13 +286,17 @@ class CATSEncoder(nn.Module):
         # --------------------------------------------------
         shared_features: Optional[torch.Tensor]
         if self.use_shared_projection:
-            shared_features = self.shared_proj(routed_x)  # [B, T, H]
+            shared_features = self.shared_proj(routed_x)
             shared_features = shared_features * mask3
         else:
             shared_features = None
 
-        exc_features = self.exc_proj(routed_x) * mask3  # [B, T, D_exc]
-        inh_features = self.inh_proj(routed_x) * mask3  # [B, T, D_inh]
+        exc_features = self.exc_proj(routed_x) * mask3
+
+        if self.inhibition_enabled:
+            inh_features = self.inh_proj(routed_x) * mask3
+        else:
+            inh_features = None
 
         # --------------------------------------------------
         # Routing-driven current construction
@@ -241,108 +307,170 @@ class CATSEncoder(nn.Module):
                     "routing_weights must have shape [B, T, G] matching the batch/time dims"
                 )
 
-            if routing_weights.size(-1) >= 2:
-                exc_gate = routing_weights[..., 0:1]
-                inh_gate = routing_weights[..., 1:2]
+            exc_gate = routing_weights[..., 0:1]
+
+            if self.inhibition_enabled:
+                if routing_weights.size(-1) >= 2:
+                    inh_gate = routing_weights[..., 1:2]
+                else:
+                    inh_gate = torch.ones(
+                        (bsz, seq_len, 1), dtype=x.dtype, device=x.device
+                    )
             else:
-                exc_gate = torch.ones((bsz, seq_len, 1), dtype=x.dtype, device=x.device)
-                inh_gate = torch.ones((bsz, seq_len, 1), dtype=x.dtype, device=x.device)
+                inh_gate = None
         else:
             exc_gate = torch.ones((bsz, seq_len, 1), dtype=x.dtype, device=x.device)
-            inh_gate = torch.ones((bsz, seq_len, 1), dtype=x.dtype, device=x.device)
+            inh_gate = (
+                torch.ones((bsz, seq_len, 1), dtype=x.dtype, device=x.device)
+                if self.inhibition_enabled else None
+            )
 
         if shared_features is not None:
-            shared_exc = shared_features[..., : self.exc_dim]
-            shared_inh = shared_features[..., self.exc_dim :]
+            if self.inhibition_enabled:
+                shared_exc = shared_features[..., : self.exc_dim]
+                shared_inh = shared_features[..., self.exc_dim:]
 
-            exc_current = (shared_exc + exc_features) * exc_gate
-            inh_current = (shared_inh + inh_features) * inh_gate
+                exc_current = (shared_exc + exc_features) * exc_gate
+                inh_current = (shared_inh + inh_features) * inh_gate
+            else:
+                exc_current = (shared_features + exc_features) * exc_gate
+                inh_current = None
         else:
             exc_current = exc_features * exc_gate
-            inh_current = inh_features * inh_gate
+            inh_current = inh_features * inh_gate if self.inhibition_enabled else None
 
         exc_current = exc_current * mask3
-        inh_current = inh_current * mask3
+        if self.inhibition_enabled:
+            inh_current = inh_current * mask3
 
-        grouped_current = torch.cat([exc_current, inh_current], dim=-1)
+        grouped_current = (
+            torch.cat([exc_current, inh_current], dim=-1)
+            if self.inhibition_enabled else exc_current
+        )
 
         # --------------------------------------------------
-        # Branch-specific group assignments
+        # Group assignments
         # --------------------------------------------------
-        # Each branch LIF sees only one population, so its per-group mapping
-        # must match that branch dimensionality, not the concatenated hidden_dim.
         exc_group_assignments = torch.zeros(
             self.exc_dim,
             device=x.device,
             dtype=torch.long,
         )
-        inh_group_assignments = torch.zeros(
-            self.inh_dim,
-            device=x.device,
-            dtype=torch.long,
-        )
 
-        # Full assignments remain useful for logging/analysis after concatenation.
-        group_assignments = torch.cat(
-            [
-                torch.zeros(self.exc_dim, device=x.device, dtype=torch.long),
-                torch.ones(self.inh_dim, device=x.device, dtype=torch.long),
-            ],
-            dim=0,
-        )
-
-        # --------------------------------------------------
-        # LIF populations
-        # --------------------------------------------------
-        exc_out = self.lif_exc(
-            exc_current,
-            attention_mask=attention_mask,
-            group_assignments=exc_group_assignments,
-        )
-        inh_out = self.lif_inh(
-            inh_current,
-            attention_mask=attention_mask,
-            group_assignments=inh_group_assignments,
-        )
-
-        if not isinstance(exc_out, dict):
-            raise TypeError(
-                f"lif_exc must return a dict, got {type(exc_out).__name__}"
+        if self.inhibition_enabled:
+            inh_group_assignments = torch.zeros(
+                self.inh_dim,
+                device=x.device,
+                dtype=torch.long,
             )
-        if not isinstance(inh_out, dict):
-            raise TypeError(
-                f"lif_inh must return a dict, got {type(inh_out).__name__}"
+            group_assignments = torch.cat(
+                [
+                    torch.zeros(self.exc_dim, device=x.device, dtype=torch.long),
+                    torch.ones(self.inh_dim, device=x.device, dtype=torch.long),
+                ],
+                dim=0,
+            )
+        else:
+            inh_group_assignments = None
+            group_assignments = torch.zeros(
+                self.exc_dim,
+                device=x.device,
+                dtype=torch.long,
             )
 
-        required_lif_keys = ("spikes", "membrane", "beta", "tau", "threshold")
-        for key in required_lif_keys:
-            if key not in exc_out:
-                raise KeyError(f"lif_exc output is missing required key: '{key}'")
-            if key not in inh_out:
-                raise KeyError(f"lif_inh output is missing required key: '{key}'")
-
-        exc_spikes = exc_out["spikes"] * mask3
-        inh_spikes = inh_out["spikes"] * mask3
-        spikes = torch.cat([exc_spikes, inh_spikes], dim=-1)
-
-        exc_membrane = exc_out["membrane"] * mask3
-        inh_membrane = inh_out["membrane"] * mask3
-        membrane = torch.cat([exc_membrane, inh_membrane], dim=-1)
-
         # --------------------------------------------------
-        # Pooling
+        # Spiking or non-spiking branch
         # --------------------------------------------------
-        pooled_exc = self._masked_mean_pool(exc_membrane, attention_mask)
-        pooled_inh = self._masked_mean_pool(inh_membrane, attention_mask)
-        pooled_concat = torch.cat([pooled_exc, pooled_inh], dim=-1)
+        if self.spiking_enabled:
+            exc_out = self.lif_exc(
+                exc_current,
+                attention_mask=attention_mask,
+                group_assignments=exc_group_assignments,
+            )
+            self._validate_lif_output(exc_out, "lif_exc")
 
-        pooled_subtractive = pooled_exc.mean(dim=-1, keepdim=True) - pooled_inh.mean(
-            dim=-1, keepdim=True
-        )
+            exc_spikes = exc_out["spikes"] * mask3
+            exc_membrane = exc_out["membrane"] * mask3
+            pooled_exc = self._masked_mean_pool(exc_membrane, attention_mask)
 
-        # --------------------------------------------------
-        # Final return
-        # --------------------------------------------------
+            if self.inhibition_enabled:
+                inh_out = self.lif_inh(
+                    inh_current,
+                    attention_mask=attention_mask,
+                    group_assignments=inh_group_assignments,
+                )
+                self._validate_lif_output(inh_out, "lif_inh")
+
+                inh_spikes = inh_out["spikes"] * mask3
+                inh_membrane = inh_out["membrane"] * mask3
+                pooled_inh = self._masked_mean_pool(inh_membrane, attention_mask)
+
+                spikes = torch.cat([exc_spikes, inh_spikes], dim=-1)
+                membrane = torch.cat([exc_membrane, inh_membrane], dim=-1)
+                pooled_features = torch.cat([pooled_exc, pooled_inh], dim=-1)
+                pooled_subtractive = (
+                    pooled_exc.mean(dim=-1, keepdim=True)
+                    - pooled_inh.mean(dim=-1, keepdim=True)
+                )
+
+                beta = torch.cat([exc_out["beta"], inh_out["beta"]], dim=0)
+                tau = torch.cat([exc_out["tau"], inh_out["tau"]], dim=0)
+                threshold = torch.cat(
+                    [exc_out["threshold"], inh_out["threshold"]],
+                    dim=0,
+                )
+            else:
+                inh_out = None
+                inh_spikes = None
+                inh_membrane = None
+                pooled_inh = None
+
+                spikes = exc_spikes
+                membrane = exc_membrane
+                pooled_features = pooled_exc
+                pooled_subtractive = None
+
+                beta = exc_out["beta"]
+                tau = exc_out["tau"]
+                threshold = exc_out["threshold"]
+
+        else:
+            # --------------------------------------------------
+            # No-spiking mode: bypass LIF and use currents directly
+            # --------------------------------------------------
+            exc_out = None
+            exc_spikes = None
+            exc_membrane = exc_current
+            pooled_exc = self._masked_mean_pool(exc_membrane, attention_mask)
+
+            if self.inhibition_enabled:
+                inh_out = None
+                inh_spikes = None
+                inh_membrane = inh_current
+                pooled_inh = self._masked_mean_pool(inh_membrane, attention_mask)
+
+                spikes = None
+                membrane = torch.cat([exc_membrane, inh_membrane], dim=-1)
+                pooled_features = torch.cat([pooled_exc, pooled_inh], dim=-1)
+                pooled_subtractive = (
+                    pooled_exc.mean(dim=-1, keepdim=True)
+                    - pooled_inh.mean(dim=-1, keepdim=True)
+                )
+            else:
+                inh_out = None
+                inh_spikes = None
+                inh_membrane = None
+                pooled_inh = None
+
+                spikes = None
+                membrane = exc_membrane
+                pooled_features = pooled_exc
+                pooled_subtractive = None
+
+            beta = None
+            tau = None
+            threshold = None
+
         return {
             "routed_embeddings": routed_x,
             "shared_features": shared_features,
@@ -366,26 +494,40 @@ class CATSEncoder(nn.Module):
 
             "pooled_exc": pooled_exc,
             "pooled_inh": pooled_inh,
-            "pooled_features": pooled_concat,
+            "pooled_features": pooled_features,
             "pooled_subtractive": pooled_subtractive,
 
-            "exc_beta": exc_out["beta"],
-            "inh_beta": inh_out["beta"],
-            "beta": torch.cat([exc_out["beta"], inh_out["beta"]], dim=0),
+            "exc_beta": exc_out["beta"] if exc_out is not None else None,
+            "inh_beta": inh_out["beta"] if inh_out is not None else None,
+            "beta": beta,
 
-            "exc_tau": exc_out["tau"],
-            "inh_tau": inh_out["tau"],
-            "tau": torch.cat([exc_out["tau"], inh_out["tau"]], dim=0),
+            "exc_tau": exc_out["tau"] if exc_out is not None else None,
+            "inh_tau": inh_out["tau"] if inh_out is not None else None,
+            "tau": tau,
 
-            "exc_threshold": exc_out["threshold"],
-            "inh_threshold": inh_out["threshold"],
-            "threshold": torch.cat([exc_out["threshold"], inh_out["threshold"]], dim=0),
+            "exc_threshold": exc_out["threshold"] if exc_out is not None else None,
+            "inh_threshold": (
+                inh_out["threshold"] if inh_out is not None else None
+            ),
+            "threshold": threshold,
 
-            "exc_effective_threshold": exc_out.get("effective_threshold", None),
-            "inh_effective_threshold": inh_out.get("effective_threshold", None),
+            "exc_effective_threshold": (
+                exc_out.get("effective_threshold", None)
+                if exc_out is not None else None
+            ),
+            "inh_effective_threshold": (
+                inh_out.get("effective_threshold", None)
+                if inh_out is not None else None
+            ),
 
-            "exc_adaptive_threshold": exc_out.get("adaptive_threshold", None),
-            "inh_adaptive_threshold": inh_out.get("adaptive_threshold", None),
+            "exc_adaptive_threshold": (
+                exc_out.get("adaptive_threshold", None)
+                if exc_out is not None else None
+            ),
+            "inh_adaptive_threshold": (
+                inh_out.get("adaptive_threshold", None)
+                if inh_out is not None else None
+            ),
 
             "routing_weights": routing_weights,
             "routing_logits": routing_out.get("routing_logits", None),

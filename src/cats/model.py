@@ -8,7 +8,6 @@ import torch.nn as nn
 from .encoder.core import CATSEncoder
 from .heads.classifier import ClassifierHead
 
-
 class CATSClassifier(nn.Module):
     def __init__(
         self,
@@ -19,8 +18,10 @@ class CATSClassifier(nn.Module):
         num_groups: int,
         router: nn.Module,
         lif_exc: nn.Module,
-        lif_inh: nn.Module,
+        lif_inh: nn.Module | None,
         classifier_cfg: Optional[Dict] = None,
+        inhibition_enabled: bool = True,
+        spiking_enabled: bool = True,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -36,11 +37,16 @@ class CATSClassifier(nn.Module):
             router=router,
             lif_exc=lif_exc,
             lif_inh=lif_inh,
+            inhibition_enabled=inhibition_enabled,
+            spiking_enabled=spiking_enabled,
             **kwargs,
         )
 
         classifier_input_dim = int(
-            classifier_cfg.get("input_dim", hidden_dim)
+            classifier_cfg.get(
+                "input_dim",
+                hidden_dim if inhibition_enabled else hidden_dim
+            )
         )
 
         self.classifier = ClassifierHead(
