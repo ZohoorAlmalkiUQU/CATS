@@ -52,10 +52,10 @@ class EmbeddingDataset(Dataset):
 
         # Backward-compatible behavior:
         # if max_cached_shards not provided:
-        #   cache_current_shard=True  -> 6
+        #   cache_current_shard=True  -> 4
         #   cache_current_shard=False -> 0
         if max_cached_shards is None:
-            max_cached_shards = 6 if cache_current_shard else 0
+            max_cached_shards = 4 if cache_current_shard else 0
 
         if not isinstance(max_cached_shards, int) or max_cached_shards < 0:
             raise ValueError(
