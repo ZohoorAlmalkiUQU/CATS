@@ -10,7 +10,6 @@ from cats.encoder.spiking.lif import LIFLayer
 from cats.encoder.routing.identity import IdentityRouter
 from cats.encoder.routing.linear import LinearRouter
 from cats.encoder.routing.carson import CARSONRouter
-from cats.encoder.routing.carson_v1 import CARSONRouterV1
 from cats.builders.build_positional_encoding import build_positional_encoding
 
 
@@ -22,9 +21,9 @@ ROUTER_REGISTRY = {
     "identity": IdentityRouter,
     "linear": LinearRouter,
     "carson": CARSONRouter,
-    "carson_v1": CARSONRouterV1,
+    # "carson_v1": CARSONRouterV1,
+    # "carson_v2": CARSONRouterV2,
 }
-
 
 def import_from_string(path: str):
     """

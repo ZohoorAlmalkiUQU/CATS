@@ -1,23 +1,29 @@
 from __future__ import annotations
 
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 
 import torch
 import torch.nn as nn
 
-from .base import BaseRouter
+from cats.encoder.routing.base import BaseRouter
 
 
 class CARSONRouter(BaseRouter):
     """
-    CARSON: Context-Aware Routing for Spiking Neural Networks.
+    Context-Aware Routing for Spiking encoders (CARSON).
 
-    Design goals:
-    - keep the same general input/output contract
-    - remain compatible with existing encoder flow
-    - add structural specialization between excitatory and inhibitory paths
-    - preserve masked-sequence support
-    - expose group-specific features for downstream current construction
+    This router operates on continuous token embeddings before spike conversion.
+    It performs iterative context-aware routing to produce:
+
+        1) routed_x: context-modulated token embeddings [B, T, D]
+        2) routing_weights: token-wise group weights [B, T, 2]
+
+    Design goals for this implementation:
+    - keep the same input/output contract as existing routers
+    - remain compatible with CATSEncoder._build_group_currents(...)
+    - support masked sequences
+    - provide a stronger routing mechanism than Identity / LinearRouter
+      without changing downstream encoder logic
 
     Expected input:
         x: [B, T, D]
@@ -30,9 +36,6 @@ class CARSONRouter(BaseRouter):
             "routing_logits": [B, T, 2],
             "context_vector": [B, D],
             "routing_confidence": [B, T],
-            "exc_features": [B, T, D],
-            "inh_features": [B, T, D],
-            "shared_features": [B, T, D],
         }
     """
 
@@ -65,46 +68,27 @@ class CARSONRouter(BaseRouter):
         if temperature <= 0:
             raise ValueError("temperature must be > 0")
 
+        self.embedding_dim = embedding_dim
+        self.num_groups = num_groups
         self.num_iterations = num_iterations
         self.hidden_dim = hidden_dim or embedding_dim
         self.temperature = temperature
         self.use_residual = use_residual
 
-        self.input_norm = (
-            nn.LayerNorm(embedding_dim) if use_layernorm else nn.Identity()
-        )
-        self.output_norm = (
-            nn.LayerNorm(embedding_dim) if use_layernorm else nn.Identity()
-        )
+        self.input_norm = nn.LayerNorm(embedding_dim) if use_layernorm else nn.Identity()
+        self.output_norm = nn.LayerNorm(embedding_dim) if use_layernorm else nn.Identity()
         self.dropout = nn.Dropout(dropout)
 
-        # 1) Shared token projection used for context routing
-        self.shared_token_proj = nn.Sequential(
+        # Token projection into routing space
+        self.token_proj = nn.Sequential(
             nn.Linear(embedding_dim, self.hidden_dim),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(self.hidden_dim, embedding_dim),
         )
 
-        # 2) Group-specific projections
-        self.exc_proj = nn.Sequential(
-            nn.Linear(embedding_dim, self.hidden_dim),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(self.hidden_dim, embedding_dim),
-        )
-
-        self.inh_proj = nn.Sequential(
-            nn.Linear(embedding_dim, self.hidden_dim),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(self.hidden_dim, embedding_dim),
-        )
-
-        self.exc_norm = nn.LayerNorm(embedding_dim) if use_layernorm else nn.Identity()
-        self.inh_norm = nn.LayerNorm(embedding_dim) if use_layernorm else nn.Identity()
-
-        # 3) Iterative context scoring using shared token features
+        # Context update network:
+        # combines token representation with current global context estimate
         self.context_gate = nn.Sequential(
             nn.Linear(embedding_dim * 2, self.hidden_dim),
             nn.GELU(),
@@ -112,7 +96,7 @@ class CARSONRouter(BaseRouter):
             nn.Linear(self.hidden_dim, 1),
         )
 
-        # 4) Shared token-context fusion for backward-compatible routed_x
+        # Token modulation conditioned on global context
         self.token_context_fusion = nn.Sequential(
             nn.Linear(embedding_dim * 2, self.hidden_dim),
             nn.GELU(),
@@ -120,9 +104,9 @@ class CARSONRouter(BaseRouter):
             nn.Linear(self.hidden_dim, embedding_dim),
         )
 
-        # 5) Group routing head
+        # Final routing head for excitatory/inhibitory groups
         self.group_head = nn.Sequential(
-            nn.Linear(embedding_dim * 3, self.hidden_dim),
+            nn.Linear(embedding_dim * 2, self.hidden_dim),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(self.hidden_dim, num_groups),
@@ -134,7 +118,7 @@ class CARSONRouter(BaseRouter):
         attention_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
-        Compute masked mean over the sequence dimension.
+        Compute masked mean over sequence dimension.
 
         Args:
             x: [B, T, D]
@@ -146,15 +130,15 @@ class CARSONRouter(BaseRouter):
         if attention_mask is None:
             return x.mean(dim=1)
 
-        mask = attention_mask.to(dtype=x.dtype, device=x.device).unsqueeze(-1)
-        denom = mask.sum(dim=1).clamp_min(1.0)
+        mask = attention_mask.to(dtype=x.dtype, device=x.device).unsqueeze(-1)  # [B,T,1]
+        denom = mask.sum(dim=1).clamp_min(1.0)  # [B,1]
         return (x * mask).sum(dim=1) / denom
 
     def _iterative_context_routing(
         self,
         tokens: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Iteratively refine a global context vector and token importance.
 
@@ -166,14 +150,11 @@ class CARSONRouter(BaseRouter):
             context: [B, D]
             token_scores: [B, T]
         """
-        context = self._masked_mean(tokens, attention_mask=attention_mask)
+        # Initial context = masked mean of token representations
+        context = self._masked_mean(tokens, attention_mask=attention_mask)  # [B,D]
 
         if attention_mask is None:
-            mask = torch.ones(
-                tokens.shape[:2],
-                device=tokens.device,
-                dtype=tokens.dtype,
-            )
+            mask = torch.ones(tokens.shape[:2], device=tokens.device, dtype=tokens.dtype)
         else:
             mask = attention_mask.to(device=tokens.device, dtype=tokens.dtype)
 
@@ -185,19 +166,23 @@ class CARSONRouter(BaseRouter):
         )
 
         for _ in range(self.num_iterations):
-            context_expanded = context.unsqueeze(1).expand(-1, tokens.size(1), -1)
-            fusion_input = torch.cat([tokens, context_expanded], dim=-1)
+            context_expanded = context.unsqueeze(1).expand(-1, tokens.size(1), -1)  # [B,T,D]
+            fusion_input = torch.cat([tokens, context_expanded], dim=-1)  # [B,T,2D]
 
-            logits = self.context_gate(fusion_input).squeeze(-1)
+            # Unnormalized token relevance to current context
+            logits = self.context_gate(fusion_input).squeeze(-1)  # [B,T]
+
+            # Mask padding tokens before softmax
             logits = logits.masked_fill(mask == 0, -1e9)
 
-            token_scores = torch.softmax(logits / self.temperature, dim=1)
+            token_scores = torch.softmax(logits / self.temperature, dim=1)  # [B,T]
             token_scores = token_scores * mask
-            token_scores = token_scores / token_scores.sum(
-                dim=1, keepdim=True
-            ).clamp_min(1e-8)
 
-            context = torch.sum(tokens * token_scores.unsqueeze(-1), dim=1)
+            # Renormalize after masking for numerical cleanliness
+            token_scores = token_scores / token_scores.sum(dim=1, keepdim=True).clamp_min(1e-8)
+
+            # Weighted context update
+            context = torch.sum(tokens * token_scores.unsqueeze(-1), dim=1)  # [B,D]
 
         return context, token_scores
 
@@ -218,9 +203,6 @@ class CARSONRouter(BaseRouter):
                 "routing_logits": [B, T, 2],
                 "context_vector": [B, D],
                 "routing_confidence": [B, T],
-                "exc_features": [B, T, D],
-                "inh_features": [B, T, D],
-                "shared_features": [B, T, D],
             }
         """
         if x.ndim != 3:
@@ -242,41 +224,22 @@ class CARSONRouter(BaseRouter):
                 )
             mask = attention_mask.to(device=x.device, dtype=x.dtype)
 
-        # Step 0: apply positional encoding shared across all routers
-        x = self.apply_positional_encoding(x, attention_mask)
-
-        # Step 1: normalize input
+        # Step 1: normalize + token projection
         x_norm = self.input_norm(x)
+        token_features = self.token_proj(x_norm)  # [B,T,D]
+        token_features = self.dropout(token_features)
 
-        # Step 2: build shared and specialized token features
-        shared_features = self.shared_token_proj(x_norm)
-        shared_features = self.dropout(shared_features)
-
-        exc_features = self.exc_proj(x_norm)
-        exc_features = self.exc_norm(exc_features)
-        exc_features = self.dropout(exc_features)
-
-        inh_features = self.inh_proj(x_norm)
-        inh_features = self.inh_norm(inh_features)
-        inh_features = self.dropout(inh_features)
-
-        # Mask padded tokens early
-        mask_expanded = mask.unsqueeze(-1)
-        shared_features = shared_features * mask_expanded
-        exc_features = exc_features * mask_expanded
-        inh_features = inh_features * mask_expanded
-
-        # Step 3: iterative context-aware routing over shared features
+        # Step 2: iterative context-aware routing
         context_vector, routing_confidence = self._iterative_context_routing(
-            shared_features,
+            token_features,
             attention_mask=mask,
-        )
+        )  # [B,D], [B,T]
 
-        context_expanded = context_vector.unsqueeze(1).expand(-1, seq_len, -1)
+        # Step 3: fuse token with routed global context
+        context_expanded = context_vector.unsqueeze(1).expand(-1, seq_len, -1)  # [B,T,D]
+        fusion_input = torch.cat([token_features, context_expanded], dim=-1)  # [B,T,2D]
 
-        # Step 4: backward-compatible routed_x construction
-        fusion_input = torch.cat([shared_features, context_expanded], dim=-1)
-        routed_delta = self.token_context_fusion(fusion_input)
+        routed_delta = self.token_context_fusion(fusion_input)  # [B,T,D]
         routed_delta = self.dropout(routed_delta)
 
         if self.use_residual:
@@ -285,32 +248,19 @@ class CARSONRouter(BaseRouter):
             routed_x = routed_delta
 
         routed_x = self.output_norm(routed_x)
-        routed_x = routed_x * mask_expanded
 
-        # Step 5: excitatory / inhibitory routing logits
-        routing_input = torch.cat(
-            [exc_features, inh_features, context_expanded],
-            dim=-1,
-        )
+        # Zero padded tokens cleanly
+        routed_x = routed_x * mask.unsqueeze(-1)
 
-        routing_logits = self.group_head(routing_input)
-        routing_logits = routing_logits.masked_fill(mask_expanded == 0, -1e9)
+        # Step 4: produce group routing weights [B,T,2]
+        routing_logits = self.group_head(
+            torch.cat([routed_x, context_expanded], dim=-1)
+        )  # [B,T,2]
 
-        routing_weights = torch.softmax(
-            routing_logits / self.temperature,
-            dim=-1,
-        )
-        routing_weights = routing_weights * mask_expanded
-        routing_weights = routing_weights / routing_weights.sum(
-            dim=-1, keepdim=True
-        ).clamp_min(1e-8)
+        routing_weights = torch.softmax(routing_logits / self.temperature, dim=-1)
 
-        # Final safety masking
-        routed_x = routed_x * mask_expanded
-        exc_features = exc_features * mask_expanded
-        inh_features = inh_features * mask_expanded
-        shared_features = shared_features * mask_expanded
-        routing_confidence = routing_confidence * mask
+        # zero-out padded tokens
+        routing_weights = routing_weights * mask.unsqueeze(-1)
 
         return {
             "routed_x": routed_x,
@@ -318,7 +268,4 @@ class CARSONRouter(BaseRouter):
             "routing_logits": routing_logits,
             "context_vector": context_vector,
             "routing_confidence": routing_confidence,
-            "exc_features": exc_features,
-            "inh_features": inh_features,
-            "shared_features": shared_features,
         }

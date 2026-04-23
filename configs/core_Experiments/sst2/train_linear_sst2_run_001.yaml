@@ -1,8 +1,8 @@
 experiment:
   dataset_name: sst2
   model_name: cats
-  routing_type: carson
-  run_name: run_002
+  routing_type: linear
+  run_name: run_001
   seed: 42
 
 data:
@@ -27,22 +27,21 @@ model:
     enabled: true
   kwargs: {}
 
-position:
-  use: true
-  type: rope
-  kwargs:
-    base: 10000.0
-
 routing:
   kwargs:
     embedding_dim: 768
     hidden_dim: 256
     num_groups: 2
-    num_iterations: 3
     dropout: 0.1
     temperature: 1.2
     use_residual: true
     use_layernorm: true
+
+position:
+  use: true
+  type: rope
+  kwargs:
+    base: 10000.0
 
 lif_exc:
   num_groups: 1
