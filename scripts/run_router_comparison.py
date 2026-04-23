@@ -9,10 +9,16 @@ def main() -> None:
     project_root = Path(__file__).resolve().parents[1]
     train_script = project_root / "scripts" / "train.py"
 
+    # config_paths = [
+    #     project_root / "configs" / "core_Experiments" /"train_carson_sst2_run_001.yaml",
+    #     project_root / "configs" / "core_Experiments" /"train_identity_sst2_run_001.yaml",
+    #     project_root / "configs" / "core_Experiments" /"train_linear_sst2_run_001.yaml",
+    # ]
+
     config_paths = [
-        project_root / "configs" / "Core_Experiments" /"train_carson_sst2_run_001.yaml",
-        project_root / "configs" / "Core_Experiments" /"train_identity_sst2_run_001.yaml",
-        project_root / "configs" / "Core_Experiments" /"train_linear_sst2_run_001.yaml",
+        project_root / "configs" / "core_Experiments" /"train_carson_sst2_run_002.yaml",
+        project_root / "configs" / "core_Experiments" /"train_identity_sst2_run_002.yaml",
+        project_root / "configs" / "core_Experiments" /"train_linear_sst2_run_002.yaml",
     ]
 
     python_executable = sys.executable

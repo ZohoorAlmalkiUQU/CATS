@@ -23,13 +23,18 @@ class LinearRouter(BaseRouter):
         embedding_dim: int,
         hidden_dim: Optional[int] = None,
         num_groups: int = 2,
-        dropout: float = 0.0,
-        temperature: float = 1.0,
+        dropout: float = 0.1,
+        temperature: float = 1.5,
         use_residual: bool = True,
         use_layernorm: bool = True,
         **kwargs: Any,
     ) -> None:
-        super().__init__(embedding_dim=embedding_dim) 
+        super().__init__(
+            embedding_dim=embedding_dim,
+            hidden_dim=hidden_dim,
+            num_groups=num_groups,
+            **kwargs,
+        )
 
         self.embedding_dim = embedding_dim
         self.hidden_dim = hidden_dim
