@@ -354,7 +354,7 @@ def build_dataloader(
     shuffle: bool,
     num_workers: int,
     pin_memory: bool,
-    max_cached_shards: int = 3,
+    max_cached_shards: int = 10,
     validate_on_load: bool = False,
 ) -> Tuple[EmbeddingDataset, DataLoader]:
     dataset = EmbeddingDataset(

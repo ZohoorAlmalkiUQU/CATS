@@ -112,6 +112,43 @@ def prepare_cifar10(raw_root: Path) -> None:
 
 
 # =========================
+# Image dataset (torchvision)
+# =========================
+def prepare_mnist(raw_root: Path) -> None:
+    from torchvision.datasets import MNIST
+
+    dataset_dir = raw_root / "mnist"
+    ensure_dir(dataset_dir)
+
+    print("Downloading/loading MNIST from torchvision...")
+
+    train_ds = MNIST(root=str(dataset_dir), train=True, download=True)
+    test_ds = MNIST(root=str(dataset_dir), train=False, download=True)
+
+    def mnist_to_dataframe(ds: Any) -> pd.DataFrame:
+        rows = []
+        for idx, (_, label) in enumerate(ds):
+            rows.append(
+                {
+                    "index": idx,
+                    "label": int(label),
+                }
+            )
+        return pd.DataFrame(rows)
+
+    train_df = mnist_to_dataframe(train_ds)
+    test_df = mnist_to_dataframe(test_ds)
+
+    preview_dataframe("mnist/train", train_df)
+    preview_dataframe("mnist/test", test_df)
+
+    save_dataframe(train_df, dataset_dir / "train_labels.csv")
+    save_dataframe(test_df, dataset_dir / "test_labels.csv")
+
+    print("\nMNIST raw preparation completed.")
+    print("Note: Images are stored automatically by torchvision.")
+
+# =========================
 # Audio dataset (torchaudio)
 # =========================
 def prepare_speech_commands(raw_root: Path, version: str = "speech_commands_v0.02") -> None:
@@ -213,7 +250,7 @@ def main() -> None:
         "--dataset",
         type=str,
         required=True,
-        choices=["sst2", "ag_news", "cifar10", "speech_commands", "all"],
+        choices=["sst2", "ag_news", "cifar10", "mnist", "speech_commands", "all"],
         help="Which dataset to prepare.",
     )
     args = parser.parse_args()
@@ -230,6 +267,9 @@ def main() -> None:
 
     if args.dataset in ("cifar10", "all"):
         prepare_cifar10(raw_root)
+
+    if args.dataset in ("mnist", "all"):
+        prepare_mnist(raw_root)
 
     if args.dataset in ("speech_commands", "all"):
         prepare_speech_commands(raw_root)

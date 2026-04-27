@@ -14,7 +14,7 @@ def main() -> None:
     # 🔧 CONTROL VARIABLES
     # =========================
     TARGET_EXPERIMENT = "core_experiments"  # future: "ablation", "scaling", ...
-    TARGET_DATASET = "cifar10"  # options: "sst2", "speech_commands", "cifar10"
+    TARGET_DATASET = "cifar10"  # options: "sst2", "speech_commands", "cifar10", "mnist"
 
     # base path
     base_config_path = project_root / "configs" / TARGET_EXPERIMENT
@@ -37,6 +37,11 @@ def main() -> None:
             base_config_path / "cifar10" / "train_carson_cifar10_run_001.yaml",
             base_config_path / "cifar10" / "train_identity_cifar10_run_001.yaml",
             base_config_path / "cifar10" / "train_linear_cifar10_run_001.yaml",
+        ],
+        "mnist": [
+            base_config_path / "mnist" / "train_carson_mnist_run_001.yaml",
+            base_config_path / "mnist" / "train_identity_mnist_run_001.yaml",
+            base_config_path / "mnist" / "train_linear_mnist_run_001.yaml",
         ],
     }
 

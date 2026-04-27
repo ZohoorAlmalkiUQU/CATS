@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 import torchaudio
 from torch.utils.data import DataLoader, Dataset, random_split
 from tqdm import tqdm
@@ -75,6 +77,124 @@ def cat_if_any(tensors: List[torch.Tensor]) -> Optional[torch.Tensor]:
 
 
 # =========================
+# Patch Embedding Surgery
+# =========================
+def build_native_vit(
+    backbone: str,
+    image_size: int,
+    patch_size: int = 4,
+    device: torch.device = torch.device("cpu"),
+):
+    """
+    Load a pretrained ViT and surgically replace:
+      - patch_embed.proj  (kernel 16x16 -> patch_size x patch_size)
+      - pos_embed         (197 tokens -> n_patches+1 tokens)
+
+    All transformer block weights are kept exactly as pretrained.
+
+    The patch projection kernel is re-initialized by spatially average-pooling
+    the pretrained 16x16 weights down to patch_size x patch_size, which
+    transfers learned color/edge priors into the new smaller kernel.
+
+    Positional embeddings are bicubic-interpolated from the original 14x14
+    grid to the new grid size — the same technique used in the ViT paper
+    (Section 3.1) and by DeiT/MAE for resolution fine-tuning.
+
+    Returns: (model, image_processor, n_tokens)
+      n_tokens = n_patches + 1  (CLS token)
+    """
+    from transformers import AutoModel, AutoImageProcessor
+
+    model = AutoModel.from_pretrained(backbone)
+    processor = AutoImageProcessor.from_pretrained(backbone)
+
+    # ── 1. Read architecture dimensions ───────────────────────────────
+    old_proj: nn.Conv2d = model.embeddings.patch_embeddings.projection
+    hidden_dim   = old_proj.out_channels   # e.g. 768 for ViT-base
+    in_channels  = old_proj.in_channels    # 3 (RGB)
+    old_kernel   = old_proj.kernel_size[0] # 16 for standard ViT-base/16
+
+    n_patches = (image_size // patch_size) ** 2   # 49 (MNIST 28x28/4) or 64 (CIFAR 32x32/4)
+    n_tokens  = n_patches + 1                     # +1 for CLS
+
+    # ── 2. Build new patch projection ─────────────────────────────────
+    new_proj = nn.Conv2d(
+        in_channels, hidden_dim,
+        kernel_size=patch_size,
+        stride=patch_size,
+        bias=(old_proj.bias is not None),
+    )
+
+    with torch.no_grad():
+        old_weight = old_proj.weight.data              # [D, 3, 16, 16]
+        # Spatially pool old_kernel x old_kernel -> patch_size x patch_size
+        w = old_weight.view(hidden_dim * in_channels, 1, old_kernel, old_kernel)
+        w = F.adaptive_avg_pool2d(w, output_size=(patch_size, patch_size))
+        new_proj.weight.data = w.view(hidden_dim, in_channels, patch_size, patch_size)
+
+        if old_proj.bias is not None:
+            new_proj.bias.data = old_proj.bias.data.clone()
+
+    # ── 3. Swap the projection layer ──────────────────────────────────
+    model.embeddings.patch_embeddings.projection = new_proj
+
+    # Update config attributes so any downstream code reads correctly.
+    # IMPORTANT: ViTPatchEmbeddings stores image_size as a tuple (H, W),
+    # so we must set it as a tuple — setting it as a plain int causes
+    # "TypeError: 'int' object is not subscriptable" inside modeling_vit.py.
+    model.config.patch_size = patch_size
+    model.config.image_size = image_size
+    if hasattr(model.embeddings.patch_embeddings, "image_size"):
+        model.embeddings.patch_embeddings.image_size = (image_size, image_size)  # must be tuple
+    if hasattr(model.embeddings.patch_embeddings, "num_patches"):
+        model.embeddings.patch_embeddings.num_patches = n_patches
+
+    # ── 4. Interpolate positional embeddings ──────────────────────────
+    # Original: [1, 197, D]  (CLS + 14x14 = 196 patches for 224x224/patch16)
+    # Target  : [1, n_tokens, D]
+    old_pos_embed = model.embeddings.position_embeddings.data  # [1, 197, D]
+
+    new_pos_embed = nn.Parameter(torch.empty(1, n_tokens, hidden_dim))
+    with torch.no_grad():
+        # CLS token: keep exactly as pretrained
+        new_pos_embed[:, 0, :] = old_pos_embed[:, 0, :]
+
+        # Patch positions: bicubic interpolation from old grid to new grid
+        old_grid = int((old_pos_embed.shape[1] - 1) ** 0.5)  # 14
+        new_grid = int(n_patches ** 0.5)                       # 7 or 8
+
+        patch_pos = old_pos_embed[:, 1:, :]                   # [1, 196, D]
+        patch_pos = patch_pos.reshape(1, old_grid, old_grid, hidden_dim)
+        patch_pos = patch_pos.permute(0, 3, 1, 2)             # [1, D, 14, 14]
+        patch_pos = F.interpolate(
+            patch_pos,
+            size=(new_grid, new_grid),
+            mode="bicubic",
+            align_corners=False,
+        )                                                      # [1, D, new_grid, new_grid]
+        patch_pos = patch_pos.permute(0, 2, 3, 1)             # [1, new_grid, new_grid, D]
+        patch_pos = patch_pos.reshape(1, n_patches, hidden_dim)
+
+        new_pos_embed[:, 1:, :] = patch_pos
+
+    model.embeddings.position_embeddings = new_pos_embed
+
+    model = model.to(device)
+    model.eval()
+
+    print(f"\n[PatchSurgery] backbone    : {backbone}")
+    print(f"               image_size  : {image_size}x{image_size}")
+    print(f"               patch_size  : {patch_size}x{patch_size}")
+    print(f"               n_patches   : {n_patches}  ({new_grid}x{new_grid} grid)")
+    print(f"               n_tokens    : {n_tokens}  (patches + CLS)")
+    print(f"               hidden_dim  : {hidden_dim}")
+    print(f"               pos_embed   : {tuple(old_pos_embed.shape)} -> {tuple(new_pos_embed.shape)}")
+    print(f"               patch_proj  : kernel {old_kernel}x{old_kernel} -> {patch_size}x{patch_size} (avg-pooled)")
+
+    return model, processor, n_tokens
+
+
+# =========================
 # Streaming shard writer
 # =========================
 class StreamingShardWriter:
@@ -124,38 +244,48 @@ class StreamingShardWriter:
         self.total_samples_seen = 0
 
     def add_batch(self, batch_data: Dict[str, Any]) -> None:
-        batch_embeddings = batch_data["embeddings"]
-        batch_attention_mask = batch_data["attention_mask"]
-        batch_size = int(batch_embeddings.shape[0])
+        batch_size = int(batch_data["embeddings"].shape[0])
+        start = 0
 
-        self._embeddings.append(batch_embeddings)
-        self._attention_masks.append(batch_attention_mask)
-        self.current_samples += batch_size
-        self.total_samples_seen += batch_size
+        while start < batch_size:
+            remaining_space = self.max_samples_per_file - self.current_samples
+            end = min(start + remaining_space, batch_size)
 
-        if "labels" in batch_data and batch_data["labels"] is not None:
-            self._labels.append(batch_data["labels"])
+            chunk_embeddings = batch_data["embeddings"][start:end]
+            chunk_attention_mask = batch_data["attention_mask"][start:end]
+            chunk_size = int(chunk_embeddings.shape[0])
 
-        if "sentences" in batch_data and batch_data["sentences"] is not None:
-            self._sentences.extend(batch_data["sentences"])
+            self._embeddings.append(chunk_embeddings)
+            self._attention_masks.append(chunk_attention_mask)
 
-        if "paths" in batch_data and batch_data["paths"] is not None:
-            self._paths.extend(batch_data["paths"])
+            self.current_samples += chunk_size
+            self.total_samples_seen += chunk_size
 
-        if "label_names" in batch_data and batch_data["label_names"] is not None:
-            self._label_names.extend(batch_data["label_names"])
+            if "labels" in batch_data and batch_data["labels"] is not None:
+                self._labels.append(batch_data["labels"][start:end])
 
-        if "speaker_ids" in batch_data and batch_data["speaker_ids"] is not None:
-            self._speaker_ids.extend(batch_data["speaker_ids"])
+            if "sentences" in batch_data and batch_data["sentences"] is not None:
+                self._sentences.extend(batch_data["sentences"][start:end])
 
-        if "utterance_numbers" in batch_data and batch_data["utterance_numbers"] is not None:
-            self._utterance_numbers.extend(batch_data["utterance_numbers"])
+            if "paths" in batch_data and batch_data["paths"] is not None:
+                self._paths.extend(batch_data["paths"][start:end])
 
-        if "sample_rates" in batch_data and batch_data["sample_rates"] is not None:
-            self._sample_rates.extend(batch_data["sample_rates"])
+            if "label_names" in batch_data and batch_data["label_names"] is not None:
+                self._label_names.extend(batch_data["label_names"][start:end])
 
-        if self.current_samples >= self.max_samples_per_file:
-            self.flush(force_shard=True, final_flush=False)
+            if "speaker_ids" in batch_data and batch_data["speaker_ids"] is not None:
+                self._speaker_ids.extend(batch_data["speaker_ids"][start:end])
+
+            if "utterance_numbers" in batch_data and batch_data["utterance_numbers"] is not None:
+                self._utterance_numbers.extend(batch_data["utterance_numbers"][start:end])
+
+            if "sample_rates" in batch_data and batch_data["sample_rates"] is not None:
+                self._sample_rates.extend(batch_data["sample_rates"][start:end])
+
+            start = end
+
+            if self.current_samples == self.max_samples_per_file:
+                self.flush(force_shard=True, final_flush=False)
 
     def flush(self, force_shard: bool = False, final_flush: bool = False) -> None:
         if self.current_samples == 0:
@@ -362,7 +492,7 @@ def extract_text_embeddings_to_files(
 
 
 # =========================
-# Image dataset
+# Image datasets
 # =========================
 class CIFAR10Wrapper(Dataset):
     def __init__(self, root: Path, train: bool):
@@ -377,11 +507,49 @@ class CIFAR10Wrapper(Dataset):
         return {"image": image, "label": int(label)}
 
 
-def collate_image(batch: List[Dict[str, Any]], image_processor) -> Dict[str, Any]:
+class MNISTWrapper(Dataset):
+    def __init__(self, root: Path, train: bool):
+        from torchvision.datasets import MNIST
+        from torchvision import transforms
+
+        self.ds = MNIST(
+            root=str(root),
+            train=train,
+            download=False,
+            transform=transforms.Lambda(lambda img: img.convert("RGB")),
+        )
+
+    def __len__(self) -> int:
+        return len(self.ds)
+
+    def __getitem__(self, idx: int) -> Dict[str, Any]:
+        image, label = self.ds[idx]
+        return {"image": image, "label": int(label)}
+
+
+def collate_image(
+    batch: List[Dict[str, Any]],
+    image_processor,
+    image_size: int,
+) -> Dict[str, Any]:
+    """
+    Collate images at their NATIVE resolution (image_size x image_size).
+
+    We explicitly override the processor's default resize target so images
+    are NOT upsampled to 224x224. This is what allows the surgically-patched
+    ViT to produce compact token sequences (49 for MNIST, 64 for CIFAR10).
+    """
     images = [item["image"] for item in batch]
     labels = torch.tensor([item["label"] for item in batch], dtype=torch.long)
 
-    processed = image_processor(images=images, return_tensors="pt")
+    processed = image_processor(
+        images=images,
+        return_tensors="pt",
+        do_resize=True,
+        size={"height": image_size, "width": image_size},  # Force native resolution
+        do_rescale=True,
+        do_normalize=True,
+    )
 
     return {
         "pixel_values": processed["pixel_values"],
@@ -403,13 +571,14 @@ def extract_image_embeddings_to_files(
     backbone: str,
     num_classes: int,
     max_samples_per_file: int,
+    image_size: int = 224,   # passed through from prepare_* so collate uses native size
 ) -> None:
     loader = DataLoader(
         dataset,
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
-        collate_fn=lambda batch: collate_image(batch, image_processor),
+        collate_fn=lambda batch: collate_image(batch, image_processor, image_size=image_size),
     )
 
     writer = StreamingShardWriter(
@@ -860,18 +1029,27 @@ def prepare_cifar10(
     val_ratio: float,
     seed: int,
     max_samples_per_file: int,
+    patch_size: int = 4,
 ) -> None:
-    from transformers import AutoImageProcessor, AutoModel
-
+    """
+    CIFAR-10: 32x32 images -> patch_size=4 -> 8x8 grid = 64 patches + 1 CLS = 65 tokens.
+    Uses patch embedding surgery on the pretrained ViT backbone.
+    """
     raw_dir = project_root / "data" / "raw" / "cifar10"
     out_dir = project_root / "data" / "processed" / "cifar10"
     ensure_dir(out_dir)
 
-    image_processor = AutoImageProcessor.from_pretrained(backbone)
-    model = AutoModel.from_pretrained(backbone).to(device)
+    image_size = 32
+    model, image_processor, n_tokens = build_native_vit(
+        backbone=backbone,
+        image_size=image_size,
+        patch_size=patch_size,
+        device=device,
+    )
+    print(f"CIFAR10: {n_tokens} tokens per image  (64 patches + 1 CLS)")
 
     train_full = CIFAR10Wrapper(root=raw_dir, train=True)
-    test_ds = CIFAR10Wrapper(root=raw_dir, train=False)
+    test_ds    = CIFAR10Wrapper(root=raw_dir, train=False)
     train_ds, val_ds = create_train_val_split(train_full, val_ratio=val_ratio, seed=seed)
 
     splits = {
@@ -895,6 +1073,64 @@ def prepare_cifar10(
             backbone=backbone,
             num_classes=10,
             max_samples_per_file=max_samples_per_file,
+            image_size=image_size,
+        )
+
+
+def prepare_mnist(
+    project_root: Path,
+    device: torch.device,
+    backbone: str,
+    batch_size: int,
+    num_workers: int,
+    val_ratio: float,
+    seed: int,
+    max_samples_per_file: int,
+    patch_size: int = 4,
+) -> None:
+    """
+    MNIST: 28x28 images -> patch_size=4 -> 7x7 grid = 49 patches + 1 CLS = 50 tokens.
+    Uses patch embedding surgery on the pretrained ViT backbone.
+    """
+    raw_dir = project_root / "data" / "raw" / "mnist"
+    out_dir = project_root / "data" / "processed" / "mnist"
+    ensure_dir(out_dir)
+
+    image_size = 28
+    model, image_processor, n_tokens = build_native_vit(
+        backbone=backbone,
+        image_size=image_size,
+        patch_size=patch_size,
+        device=device,
+    )
+    print(f"MNIST: {n_tokens} tokens per image  (49 patches + 1 CLS)")
+
+    train_full = MNISTWrapper(root=raw_dir, train=True)
+    test_ds    = MNISTWrapper(root=raw_dir, train=False)
+    train_ds, val_ds = create_train_val_split(train_full, val_ratio=val_ratio, seed=seed)
+
+    splits = {
+        "train": train_ds,
+        "validation": val_ds,
+        "test": test_ds,
+    }
+
+    for split_name, split_ds in splits.items():
+        print(f"\nProcessing mnist/{split_name}")
+        extract_image_embeddings_to_files(
+            split_name=split_name,
+            dataset=split_ds,
+            image_processor=image_processor,
+            model=model,
+            device=device,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            output_dir=out_dir,
+            dataset_name="mnist",
+            backbone=backbone,
+            num_classes=10,
+            max_samples_per_file=max_samples_per_file,
+            image_size=image_size,
         )
 
 
@@ -953,7 +1189,7 @@ def main() -> None:
         "--dataset",
         type=str,
         required=True,
-        choices=["sst2", "ag_news", "cifar10", "speech_commands", "all"],
+        choices=["sst2", "ag_news", "cifar10", "mnist", "speech_commands", "all"],
     )
 
     parser.add_argument("--device", type=str, default=None)
@@ -971,9 +1207,20 @@ def main() -> None:
     parser.add_argument("--keep-text", action="store_true")
 
     parser.add_argument(
+        "--patch-size",
+        type=int,
+        default=4,
+        help=(
+            "Patch size for image ViT surgery. "
+            "MNIST 28x28/4 -> 49 tokens. CIFAR10 32x32/4 -> 64 tokens. "
+            "Pretrained weights are transferred via kernel avg-pooling + pos-embed interpolation."
+        ),
+    )
+
+    parser.add_argument(
         "--max-samples-per-file",
         type=int,
-        default=5000,
+        default=1000,
         help="Maximum number of samples in each saved .pt file. If exceeded, shards are written automatically.",
     )
 
@@ -1023,6 +1270,20 @@ def main() -> None:
             val_ratio=args.val_ratio,
             seed=args.seed,
             max_samples_per_file=args.max_samples_per_file,
+            patch_size=args.patch_size,
+        )
+
+    if args.dataset in ("mnist", "all"):
+        prepare_mnist(
+            project_root=project_root,
+            device=device,
+            backbone=args.image_backbone,
+            batch_size=args.batch_size,
+            num_workers=args.num_workers,
+            val_ratio=args.val_ratio,
+            seed=args.seed,
+            max_samples_per_file=args.max_samples_per_file,
+            patch_size=args.patch_size,
         )
 
     if args.dataset in ("speech_commands", "all"):
