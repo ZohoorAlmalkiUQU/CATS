@@ -1,9 +1,9 @@
 experiment:
-  main_experiment_name: core_experiments
-  sub_experiment_name: null
-  dataset_name: speech_commands
+  main_experiment_name: carson_ablation_study
+  sub_experiment_name: fixed_tau
+  dataset_name: cifar10
   model_name: cats
-  routing_type: linear
+  routing_type: carson
   run_name: run_001
   seed: 42
 
@@ -20,7 +20,7 @@ model:
   class_path: cats.model.CATSClassifier
   embedding_dim: 768
   hidden_dim: 256
-  num_classes: 35
+  num_classes: 10
   excitatory_ratio: 0.5
   num_groups: 2
   spiking:
@@ -30,28 +30,29 @@ model:
   kwargs: 
       use_shared_projection: true
 
-routing:
-  kwargs:
-    embedding_dim: 768
-    hidden_dim: 256
-    num_groups: 2
-    dropout: 0.1
-    temperature: 1.2
-    use_residual: true
-    use_layernorm: true
-
 position:
   use: true
   type: rope
   kwargs:
     base: 10000.0
 
+routing:
+  kwargs:
+    embedding_dim: 768
+    hidden_dim: 256
+    num_groups: 2
+    num_iterations: 3
+    dropout: 0.1
+    temperature: 1.2
+    use_residual: true
+    use_layernorm: true
+
 lif_exc:
   num_groups: 1
   reset_to_zero: true
   detach_reset: false
   tau:
-    learnable: true
+    learnable: false
     mode: shared
     min: 14.0
     max: 28.0
@@ -77,7 +78,7 @@ lif_inh:
   reset_to_zero: true
   detach_reset: false
   tau:
-    learnable: true
+    learnable: false
     mode: shared
     min: 6.0
     max: 14.0

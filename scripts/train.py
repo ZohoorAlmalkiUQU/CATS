@@ -304,8 +304,13 @@ def resolve_log_dir(
     model_name = experiment_cfg["model_name"]
     routing_type = experiment_cfg["routing_type"]
     run_name = experiment_cfg["run_name"]
+    main_exp = experiment_cfg.get("main_experiment_name", "default")
+    sub_exp = experiment_cfg.get("sub_experiment_name", None)
 
-    return base_dir / dataset_name / model_name / routing_type / run_name
+    if sub_exp:
+        return base_dir / main_exp / sub_exp / dataset_name / model_name / routing_type / run_name
+    else:
+        return base_dir / main_exp / dataset_name / model_name / routing_type / run_name
 
 
 def resolve_checkpoint_paths(

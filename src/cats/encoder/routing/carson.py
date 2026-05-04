@@ -224,6 +224,9 @@ class CARSONRouter(BaseRouter):
                 )
             mask = attention_mask.to(device=x.device, dtype=x.dtype)
 
+        # Apply optional positional encoding before CARSON routing
+        x = self.apply_positional_encoding(x, attention_mask)
+
         # Step 1: normalize + token projection
         x_norm = self.input_norm(x)
         token_features = self.token_proj(x_norm)  # [B,T,D]

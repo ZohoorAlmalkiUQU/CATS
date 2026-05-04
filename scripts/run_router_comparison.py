@@ -14,7 +14,7 @@ def main() -> None:
     # 🔧 CONTROL VARIABLES
     # =========================
     TARGET_EXPERIMENT = "core_experiments"  # future: "ablation", "scaling", ...
-    TARGET_DATASET = "cifar10"  # options: "sst2", "speech_commands", "cifar10", "mnist"
+    TARGET_DATASET = "mnist"  # options: "sst2", "speech_commands", "cifar10", "mnist"
 
     # base path
     base_config_path = project_root / "configs" / TARGET_EXPERIMENT

@@ -270,10 +270,12 @@ Example:
 
 ```yaml
 experiment:
-  dataset_name: sst2
+  main_experiment_name: carson_ablation_study
+  sub_experiment_name: fixed_tau
+  dataset_name: cifar10
   model_name: cats
   routing_type: carson
-  run_name: run_002
+  run_name: run_001
   seed: 42
 
 data:
@@ -289,10 +291,21 @@ model:
   class_path: cats.model.CATSClassifier
   embedding_dim: 768
   hidden_dim: 256
-  num_classes: 2
+  num_classes: 10
   excitatory_ratio: 0.5
   num_groups: 2
-  kwargs: {}
+  spiking:
+    enabled: true
+  inhibition:
+    enabled: true
+  kwargs: 
+      use_shared_projection: true
+
+position:
+  use: true
+  type: rope
+  kwargs:
+    base: 10000.0
 
 routing:
   kwargs:
@@ -309,21 +322,18 @@ lif_exc:
   num_groups: 1
   reset_to_zero: true
   detach_reset: false
-
   tau:
-    learnable: true
+    learnable: false
     mode: shared
     min: 14.0
     max: 28.0
     init: 20.0
-
   threshold:
     learnable: true
     mode: shared
     min: 0.35
     max: 1.2
     init: 0.65
-
   adaptive_threshold:
     enabled: true
     mode: shared
@@ -338,21 +348,18 @@ lif_inh:
   num_groups: 1
   reset_to_zero: true
   detach_reset: false
-
   tau:
-    learnable: true
+    learnable: false
     mode: shared
     min: 6.0
     max: 14.0
     init: 9.0
-
   threshold:
     learnable: true
     mode: shared
     min: 0.35
     max: 0.9
     init: 0.55
-
   adaptive_threshold:
     enabled: true
     mode: shared
@@ -375,21 +382,14 @@ training:
   deterministic: false
   batch_size: 32
   epochs: 10
-
   optimizer: adamw
   lr: 1e-4
   weight_decay: 1e-5
-
   criterion: cross_entropy
   grad_clip_norm: 1.0
-
-  early_stopping:
-    enabled: true
-    patience: 3
-    min_delta: 0.001
-    monitor: val_f1
-    mode: max
-
+  early_stopping_enabled: true
+  early_stopping_patience: 3
+  early_stopping_min_delta: 0.0001
   lambda_balance: 0.2
   lambda_entropy: 0.001
 
@@ -403,7 +403,7 @@ checkpoints:
 
 runtime:
   device: cuda
-````
+```
 
 ---
 

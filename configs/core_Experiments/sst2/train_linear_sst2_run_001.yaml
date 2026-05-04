@@ -1,4 +1,6 @@
 experiment:
+  main_experiment_name: core_experiments
+  sub_experiment_name: null
   dataset_name: sst2
   model_name: cats
   routing_type: linear
@@ -25,7 +27,8 @@ model:
     enabled: true
   inhibition:
     enabled: true
-  kwargs: {}
+  kwargs: 
+      use_shared_projection: true
 
 routing:
   kwargs:

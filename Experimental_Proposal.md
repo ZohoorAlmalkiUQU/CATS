@@ -34,17 +34,22 @@ We structure our experiments around the following research questions:
 
 We evaluate the framework across three modalities:
 
-| Modality | Dataset         | Router   |
-|----------|-----------------|----------|
-| Text     | SST-2           | identity |
-| Text     | SST-2           | linear   |
-| Text     | SST-2           | carson   |
-| Image    | CIFAR-10        | identity |
-| Image    | CIFAR-10        | linear   |
-| Image    | CIFAR-10        | carson   |
-| Audio    | Speech Commands | identity |
-| Audio    | Speech Commands | linear   |
-| Audio    | Speech Commands | carson   |
+### **Experimental Grid (Core Results)**
+
+| Modality | Dataset         | Router   |
+| -------- | --------------- | -------- |
+| Image    | CIFAR-10        | identity |
+| Image    | CIFAR-10        | linear   |
+| Image    | CIFAR-10        | carson   |
+| Image    | MNIST           | identity |
+| Image    | MNIST           | linear   |
+| Image    | MNIST           | carson   |
+| Text     | SST-2           | identity |
+| Text     | SST-2           | linear   |
+| Text     | SST-2           | carson   |
+| Audio    | Speech Commands | identity |
+| Audio    | Speech Commands | linear   |
+| Audio    | Speech Commands | carson   |
 
 All experiments use **precomputed embeddings** to isolate the effect of routing and spiking dynamics.
 
@@ -90,17 +95,22 @@ All models use:
 
 #### Experimental Grid
 
-| Modality | Dataset         | Router   |
-|----------|-----------------|----------|
-| Text     | SST-2           | identity |
-| Text     | SST-2           | linear   |
-| Text     | SST-2           | carson   |
-| Image    | CIFAR-10        | identity |
-| Image    | CIFAR-10        | linear   |
-| Image    | CIFAR-10        | carson   |
-| Audio    | Speech Commands | identity |
-| Audio    | Speech Commands | linear   |
-| Audio    | Speech Commands | carson   |
+### **Experimental Grid (Core Results)**
+
+| Modality | Dataset         | Router   |
+| -------- | --------------- | -------- |
+| Image    | CIFAR-10        | identity |
+| Image    | CIFAR-10        | linear   |
+| Image    | CIFAR-10        | carson   |
+| Image    | MNIST           | identity |
+| Image    | MNIST           | linear   |
+| Image    | MNIST           | carson   |
+| Text     | SST-2           | identity |
+| Text     | SST-2           | linear   |
+| Text     | SST-2           | carson   |
+| Audio    | Speech Commands | identity |
+| Audio    | Speech Commands | linear   |
+| Audio    | Speech Commands | carson   |
 
 #### Evaluation Metrics
 
@@ -130,15 +140,17 @@ We perform a detailed ablation study within the CARSON configuration (on a prima
 
 #### Experiments
 
-| Experiment Name           | Description                                  |
-|---------------------------|----------------------------------------------|
-| baseline_cats             | Full CARSON configuration                    |
-| no_positional             | Remove positional encoding                   |
-| fixed_threshold           | Replace adaptive threshold with fixed value  |
-| fixed_tau                 | Fix membrane time constant (τ)               |
-| fixed_tau_fixed_threshold | Fully static spiking dynamics                |
-| no_inhibition             | Disable inhibitory neurons                   |
-| no_spiking                | Replace SNN with ANN (no spike conversion)   |
+| Experiment Name                              | Description                                                                |
+|----------------------------------------------|----------------------------------------------------------------------------|
+| baseline_cats                                | Full CARSON configuration                                                  |
+| no_positional                                | Remove positional encoding (RoPE disabled)                                 |
+| fixed_tau                                    | Fix membrane time constant (τ), keep threshold and adaptive dynamics       |
+| fixed_threshold                              | Fix base threshold (θ), keep adaptive threshold enabled                    |
+| no_adaptive                                  | Disable adaptive threshold dynamics (θ_adapt), keep τ and θ learnable      |
+| fixed_tau_fixed_threshold                    | Fix τ and base θ, keep adaptive threshold enabled                          |
+| fixed_tau_fixed_threshold_no_adaptive        | Fully static spiking dynamics (τ fixed, θ fixed, no adaptive threshold)    |
+| no_inhibition                                | Disable inhibitory pathway (excitatory-only spiking)                       |
+| no_spiking                                   | Remove spiking encoder (ANN-only model after routing)                      |
 
 #### Goal
 
