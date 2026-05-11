@@ -6,7 +6,9 @@ import torch
 import torch.nn as nn
 
 from .encoder.core import CATSEncoder
-from .heads.classifier import ClassifierHead
+from .heads.ann_classifier import ANNClassifierHead
+from .heads.snn_classifier import SNNClassifierHead
+
 
 class CATSClassifier(nn.Module):
     def __init__(
@@ -29,6 +31,8 @@ class CATSClassifier(nn.Module):
         classifier_cfg = classifier_cfg or {}
         classifier_kwargs = dict(classifier_cfg.get("kwargs", {}) or {})
 
+        self.classifier_type = classifier_cfg.get("type", "ann").lower()
+
         self.encoder = CATSEncoder(
             embedding_dim=embedding_dim,
             hidden_dim=hidden_dim,
@@ -42,18 +46,22 @@ class CATSClassifier(nn.Module):
             **kwargs,
         )
 
-        classifier_input_dim = int(
-            classifier_cfg.get(
-                "input_dim",
-                hidden_dim if inhibition_enabled else hidden_dim
-            )
-        )
+        classifier_input_dim = int(classifier_cfg.get("input_dim", hidden_dim))
 
-        self.classifier = ClassifierHead(
-            input_dim=classifier_input_dim,
-            num_classes=num_classes,
-            **classifier_kwargs,
-        )
+        if self.classifier_type == "ann":
+            self.classifier = ANNClassifierHead(
+                input_dim=classifier_input_dim,
+                num_classes=num_classes,
+                **classifier_kwargs,
+            )
+        elif self.classifier_type == "snn":
+            self.classifier = SNNClassifierHead(
+                input_dim=classifier_input_dim,
+                num_classes=num_classes,
+                **classifier_kwargs,
+            )
+        else:
+            raise ValueError(f"Unknown classifier type: {self.classifier_type}")
 
     def forward(
         self,
@@ -63,23 +71,13 @@ class CATSClassifier(nn.Module):
         x: Optional[torch.Tensor] = None,
         **kwargs,
     ) -> Dict[str, torch.Tensor]:
-        """
-        Args:
-            embeddings: [B, T, D] input embeddings
-            attention_mask: [B, T]
-            labels: [B]
-            x: optional alias for embeddings, for compatibility
 
-        Returns:
-            Dict containing logits, probs, predictions, and encoder outputs.
-        """
         if embeddings is None:
             embeddings = x
 
         if embeddings is None:
             raise ValueError(
-                "CATSClassifier.forward requires `embeddings` "
-                "or alias `x`."
+                "CATSClassifier.forward requires `embeddings` or alias `x`."
             )
 
         encoder_outputs = self.encoder(
@@ -88,8 +86,31 @@ class CATSClassifier(nn.Module):
             **kwargs,
         )
 
+        # if not hasattr(self, "_printed_encoder_keys"):
+        #     print("encoder_outputs keys:", encoder_outputs.keys())
+        #     for k, v in encoder_outputs.items():
+        #         if torch.is_tensor(v):
+        #             print(f"{k}: shape={tuple(v.shape)}, dtype={v.dtype}")
+        #     self._printed_encoder_keys = True
+
         pooled_features = encoder_outputs["pooled_features"]
-        logits = self.classifier(pooled_features)
+
+        if self.classifier_type == "snn":
+            if "spikes" in encoder_outputs:
+                sequence_features = encoder_outputs["spikes"]
+            elif "sequence_features" in encoder_outputs:
+                sequence_features = encoder_outputs["sequence_features"]
+            elif "encoded_sequence" in encoder_outputs:
+                sequence_features = encoder_outputs["encoded_sequence"]
+            else:
+                raise KeyError(
+                    "SNN classifier requires sequence output from encoder_outputs. "
+                    f"Available keys: {list(encoder_outputs.keys())}"
+                )
+
+            logits = self.classifier(sequence_features, mask=attention_mask)
+        else:
+            logits = self.classifier(pooled_features)
 
         outputs: Dict[str, torch.Tensor] = {
             "logits": logits,

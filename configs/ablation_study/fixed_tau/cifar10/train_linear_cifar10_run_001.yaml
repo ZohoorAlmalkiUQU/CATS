@@ -1,0 +1,134 @@
+experiment:
+  main_experiment_name: ablation_study
+  sub_experiment_name: fixed_tau
+  dataset_name: cifar10
+  model_name: cats
+  routing_type: linear
+  run_name: run_001
+  seed: 42
+
+data:
+  processed_root: data/processed
+  train_split: train
+  val_split: validation
+  test_split: test
+  has_test: true
+  num_workers: 0
+  pin_memory: true
+
+model:
+  class_path: cats.model.CATSClassifier
+  embedding_dim: 768
+  hidden_dim: 256
+  num_classes: 10
+  excitatory_ratio: 0.5
+  num_groups: 2
+  spiking:
+    enabled: true
+  inhibition:
+    enabled: true
+  kwargs: 
+      use_shared_projection: true
+
+position:
+  use: true
+  type: rope
+  kwargs:
+    base: 10000.0
+
+routing:
+  kwargs:
+    embedding_dim: 768
+    hidden_dim: 256
+    num_groups: 2
+    num_iterations: 3
+    dropout: 0.1
+    temperature: 1.2
+    use_residual: true
+    use_layernorm: true
+
+lif_exc:
+  num_groups: 1
+  reset_to_zero: true
+  detach_reset: false
+  tau:
+    learnable: false
+    mode: shared
+    min: 14.0
+    max: 28.0
+    init: 20.0
+  threshold:
+    learnable: true
+    mode: shared
+    min: 0.35
+    max: 1.2
+    init: 0.65
+  adaptive_threshold:
+    enabled: true
+    mode: shared
+    init: 0.0
+    decay: 0.97
+    spike_increment: 0.05
+    min: 0.0
+    max: 2.0
+    detach_spikes: true
+
+lif_inh:
+  num_groups: 1
+  reset_to_zero: true
+  detach_reset: false
+  tau:
+    learnable: false
+    mode: shared
+    min: 6.0
+    max: 14.0
+    init: 9.0
+  threshold:
+    learnable: true
+    mode: shared
+    min: 0.35
+    max: 0.9
+    init: 0.55
+  adaptive_threshold:
+    enabled: true
+    mode: shared
+    init: 0.0
+    decay: 0.96
+    spike_increment: 0.08
+    min: 0.0
+    max: 2.0
+    detach_spikes: true
+
+classifier:
+  input_dim: 256
+  kwargs:
+    hidden_dim: null
+    dropout: 0.0
+    use_layernorm: false
+
+training:
+  seed: 42
+  deterministic: false
+  batch_size: 32
+  epochs: 10
+  optimizer: adamw
+  lr: 1e-4
+  weight_decay: 1e-5
+  criterion: cross_entropy
+  grad_clip_norm: 1.0
+  early_stopping_enabled: true
+  early_stopping_patience: 3
+  early_stopping_min_delta: 0.0001
+  lambda_balance: 0.2
+  lambda_entropy: 0.001
+
+logging:
+  base_dir: logs
+
+checkpoints:
+  base_dir: checkpoints
+  best_name_template: best_{run_name}.pt
+  latest_name_template: latest_{run_name}.pt
+
+runtime:
+  device: cuda

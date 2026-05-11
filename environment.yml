@@ -1,0 +1,37 @@
+name: cats-env
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.10
+  - pip
+  - numpy
+  - pandas
+  - scikit-learn
+  - scipy
+  - matplotlib
+  - seaborn
+  - tqdm
+  - pyyaml
+  - pyarrow
+  - pytest
+  - jupyter
+  - ipykernel
+
+  # GPU PyTorch
+  - pytorch
+  - torchvision
+  - torchaudio
+  - pytorch-cuda=12.1
+
+  - pip:
+      - transformers
+      - datasets
+      - accelerate
+      - safetensors
+      - evaluate
+      - einops
+      - rich

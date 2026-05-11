@@ -5,7 +5,6 @@ from typing import Any, Dict
 
 import torch.nn as nn
 
-from cats.model import CATSClassifier
 from cats.encoder.spiking.lif import LIFLayer
 from cats.encoder.routing.identity import IdentityRouter
 from cats.encoder.routing.linear import LinearRouter
@@ -186,9 +185,7 @@ def build_model(
             num_groups=1,
         )
 
-    classifier_kwargs = dict(classifier_cfg.get("kwargs", {}) or {})
-
-    model = ModelClass(
+        model = ModelClass(
         embedding_dim=embedding_dim,
         hidden_dim=hidden_dim,
         num_classes=num_classes,
@@ -200,7 +197,7 @@ def build_model(
         classifier_cfg=classifier_cfg,
         inhibition_enabled=inhibition_enabled,
         spiking_enabled=spiking_enabled,
-        **classifier_kwargs,
         **model_kwargs,
     )
+
     return model
