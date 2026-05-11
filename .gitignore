@@ -20,6 +20,7 @@ dist/
 # ==============================
 # Virtual Environments
 # ==============================
+cats-env
 .venv/
 venv/
 env/

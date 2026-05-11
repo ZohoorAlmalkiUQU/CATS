@@ -1,9 +1,9 @@
 experiment:
-  main_experiment_name: ablation_study
-  sub_experiment_name: no_adaptive
+  main_experiment_name: core_experiments
+  sub_experiment_name: full_routing
   dataset_name: cifar10
   model_name: cats
-  routing_type: carson
+  routing_type: linear
   run_name: run_002
   seed: 42
 
@@ -30,22 +30,21 @@ model:
   kwargs: 
       use_shared_projection: true
 
-position:
-  use: true
-  type: rope
-  kwargs:
-    base: 10000.0
-
 routing:
   kwargs:
     embedding_dim: 768
     hidden_dim: 256
     num_groups: 2
-    num_iterations: 3
     dropout: 0.1
     temperature: 1.2
     use_residual: true
     use_layernorm: true
+
+position:
+  use: true
+  type: rope
+  kwargs:
+    base: 10000.0
 
 lif_exc:
   num_groups: 1
@@ -64,7 +63,7 @@ lif_exc:
     max: 1.2
     init: 0.65
   adaptive_threshold:
-    enabled: false
+    enabled: true
     mode: shared
     init: 0.0
     decay: 0.97
@@ -90,7 +89,7 @@ lif_inh:
     max: 0.9
     init: 0.55
   adaptive_threshold:
-    enabled: false
+    enabled: true
     mode: shared
     init: 0.0
     decay: 0.96
@@ -108,10 +107,6 @@ classifier:
     dropout: 0.0
     readout: mean_membrane
 
-<<<<<<< HEAD
-=======
-
->>>>>>> 6e83f5480c91f51a84ba7b6bd3ec64ddacaf4946
 training:
   seed: 42
   deterministic: false
