@@ -14,7 +14,7 @@ def main() -> None:
     # 🔧 CONTROL VARIABLES
     # =========================
     TARGET_EXPERIMENT = "core_experiments"  # future: "ablation", "scaling", ...
-    TARGET_DATASET = "mnist"  # options: "sst2", "speech_commands", "cifar10", "mnist"
+    TARGET_DATASET = "cifar10"  # options: "sst2", "speech_commands", "cifar10", "mnist"
 
     # base path
     base_config_path = project_root / "configs" / TARGET_EXPERIMENT
@@ -23,26 +23,27 @@ def main() -> None:
     # CONFIG GROUPS
     # =========================
     config_groups = {
-        "sst2": [
-            base_config_path / "sst2" / "train_carson_sst2_run_001.yaml",
-            base_config_path / "sst2" / "train_identity_sst2_run_001.yaml",
-            base_config_path / "sst2" / "train_linear_sst2_run_001.yaml",
-        ],
-        "speech_commands": [
-            base_config_path / "speech_commands" / "train_carson_speech_commands_run_001.yaml",
-            base_config_path / "speech_commands" / "train_identity_speech_commands_run_001.yaml",
-            base_config_path / "speech_commands" / "train_linear_speech_commands_run_001.yaml",
-        ],
+    #     "sst2": [
+    #         base_config_path / "sst2" / "train_carson_sst2_run_001.yaml",
+    #         base_config_path / "sst2" / "train_identity_sst2_run_001.yaml",
+    #         base_config_path / "sst2" / "train_linear_sst2_run_001.yaml",
+    #     ],
+    #     "speech_commands": [
+    #         base_config_path / "speech_commands" / "train_carson_speech_commands_run_001.yaml",
+    #         base_config_path / "speech_commands" / "train_identity_speech_commands_run_001.yaml",
+    #         base_config_path / "speech_commands" / "train_linear_speech_commands_run_001.yaml",
+    #     ],
         "cifar10": [
-            base_config_path / "cifar10" / "train_carson_cifar10_run_001.yaml",
-            base_config_path / "cifar10" / "train_identity_cifar10_run_001.yaml",
-            base_config_path / "cifar10" / "train_linear_cifar10_run_001.yaml",
+            base_config_path / "cifar10" / "train_carson_cifar10_run_002.yaml",
+    #         base_config_path / "cifar10" / "train_carson_cifar10_run_001.yaml",
+    #         base_config_path / "cifar10" / "train_identity_cifar10_run_001.yaml",
+    #         base_config_path / "cifar10" / "train_linear_cifar10_run_001.yaml",
         ],
-        "mnist": [
-            base_config_path / "mnist" / "train_carson_mnist_run_001.yaml",
-            base_config_path / "mnist" / "train_identity_mnist_run_001.yaml",
-            base_config_path / "mnist" / "train_linear_mnist_run_001.yaml",
-        ],
+    #     "mnist": [
+    #         base_config_path / "mnist" / "train_carson_mnist_run_001.yaml",
+    #         base_config_path / "mnist" / "train_identity_mnist_run_001.yaml",
+    #         base_config_path / "mnist" / "train_linear_mnist_run_001.yaml",
+    #     ],
     }
 
     # =========================

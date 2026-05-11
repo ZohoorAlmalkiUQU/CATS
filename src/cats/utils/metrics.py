@@ -52,6 +52,151 @@ def binary_f1_from_logits(logits: torch.Tensor, labels: torch.Tensor) -> float:
     f1 = 2 * precision * recall / (precision + recall + 1e-8)
     return float(f1)
 
+def compute_threshold_metrics(
+    adaptive_threshold: torch.Tensor,
+    effective_threshold: torch.Tensor,
+    attention_mask: Optional[torch.Tensor] = None,
+    group_assignments: Optional[torch.Tensor] = None,
+) -> Dict[str, float]:
+    """
+    Compute adaptive/effective threshold diagnostics.
+
+    Args:
+        adaptive_threshold: [B, T, D]
+            Dynamic adaptive threshold state over time.
+        effective_threshold: [B, T, D]
+            Actual threshold used for firing = base_threshold + adaptive_state.
+        attention_mask: [B, T] or None
+        group_assignments: [D], where 0=exc and 1=inh
+
+    Returns:
+        Dictionary containing threshold dynamics statistics.
+    """
+    if adaptive_threshold.ndim != 3:
+        raise ValueError(
+            f"adaptive_threshold must be [B, T, D], got {tuple(adaptive_threshold.shape)}"
+        )
+
+    if effective_threshold.ndim != 3:
+        raise ValueError(
+            f"effective_threshold must be [B, T, D], got {tuple(effective_threshold.shape)}"
+        )
+
+    if adaptive_threshold.shape != effective_threshold.shape:
+        raise ValueError(
+            "adaptive_threshold and effective_threshold must have the same shape, "
+            f"got {tuple(adaptive_threshold.shape)} and {tuple(effective_threshold.shape)}"
+        )
+
+    bsz, seq_len, hidden_dim = adaptive_threshold.shape
+    device = adaptive_threshold.device
+    dtype = adaptive_threshold.dtype
+
+    if attention_mask is None:
+        mask = torch.ones((bsz, seq_len), device=device, dtype=dtype)
+    else:
+        if attention_mask.shape != (bsz, seq_len):
+            raise ValueError(
+                f"attention_mask must have shape {(bsz, seq_len)}, "
+                f"got {tuple(attention_mask.shape)}"
+            )
+        mask = attention_mask.to(device=device, dtype=dtype)
+
+    mask3 = mask.unsqueeze(-1).expand_as(adaptive_threshold)
+    valid_count = max(float(mask3.sum().item()), 1.0)
+
+    adaptive_masked = adaptive_threshold * mask3
+    effective_masked = effective_threshold * mask3
+
+    adaptive_vals = adaptive_threshold[mask3.bool()]
+    effective_vals = effective_threshold[mask3.bool()]
+
+    metrics: Dict[str, float] = {
+        "adaptive_threshold_mean": float(adaptive_masked.sum().item() / valid_count),
+        "effective_threshold_mean": float(effective_masked.sum().item() / valid_count),
+    }
+
+    if adaptive_vals.numel() > 0:
+        metrics["adaptive_threshold_std"] = float(
+            adaptive_vals.std(unbiased=False).item()
+        )
+        metrics["adaptive_threshold_min"] = float(adaptive_vals.min().item())
+        metrics["adaptive_threshold_max"] = float(adaptive_vals.max().item())
+
+    if effective_vals.numel() > 0:
+        metrics["effective_threshold_std"] = float(
+            effective_vals.std(unbiased=False).item()
+        )
+        metrics["effective_threshold_min"] = float(effective_vals.min().item())
+        metrics["effective_threshold_max"] = float(effective_vals.max().item())
+
+    # Temporal dynamics: does the adaptive threshold change across timesteps?
+    temporal_var = adaptive_threshold.var(dim=1, unbiased=False)  # [B, D]
+    metrics["adaptive_threshold_temporal_var_mean"] = float(
+        temporal_var.mean().item()
+    )
+
+    # Final timestep adaptive state
+    final_adaptive = adaptive_threshold[:, -1, :]  # [B, D]
+    metrics["adaptive_threshold_final_mean"] = float(final_adaptive.mean().item())
+    metrics["adaptive_threshold_final_std"] = float(
+        final_adaptive.std(unbiased=False).item()
+    )
+
+    if group_assignments is not None:
+        if group_assignments.ndim != 1:
+            raise ValueError(
+                f"group_assignments must be [D], got {tuple(group_assignments.shape)}"
+            )
+
+        if group_assignments.shape[0] != hidden_dim:
+            raise ValueError(
+                f"group_assignments length must equal D={hidden_dim}, "
+                f"got {group_assignments.shape[0]}"
+            )
+
+        group_assignments = group_assignments.to(device=device, dtype=torch.long)
+
+        exc_idx = group_assignments == 0
+        inh_idx = group_assignments == 1
+
+        if exc_idx.any():
+            exc_adapt = adaptive_threshold[..., exc_idx]
+            exc_eff = effective_threshold[..., exc_idx]
+
+            metrics["exc_adaptive_threshold_mean"] = float(exc_adapt.mean().item())
+            metrics["exc_adaptive_threshold_std"] = float(
+                exc_adapt.std(unbiased=False).item()
+            )
+            metrics["exc_effective_threshold_mean"] = float(exc_eff.mean().item())
+            metrics["exc_effective_threshold_std"] = float(
+                exc_eff.std(unbiased=False).item()
+            )
+
+        if inh_idx.any():
+            inh_adapt = adaptive_threshold[..., inh_idx]
+            inh_eff = effective_threshold[..., inh_idx]
+
+            metrics["inh_adaptive_threshold_mean"] = float(inh_adapt.mean().item())
+            metrics["inh_adaptive_threshold_std"] = float(
+                inh_adapt.std(unbiased=False).item()
+            )
+            metrics["inh_effective_threshold_mean"] = float(inh_eff.mean().item())
+            metrics["inh_effective_threshold_std"] = float(
+                inh_eff.std(unbiased=False).item()
+            )
+
+        if exc_idx.any() and inh_idx.any():
+            metrics["exc_inh_adaptive_threshold_diff"] = float(
+                metrics["exc_adaptive_threshold_mean"]
+                - metrics["inh_adaptive_threshold_mean"]
+            )
+            metrics["exc_inh_effective_threshold_diff"] = float(
+                metrics["exc_effective_threshold_mean"]
+                - metrics["inh_effective_threshold_mean"]
+            )
+
+    return metrics
 
 def compute_spike_metrics(
     spikes: torch.Tensor,

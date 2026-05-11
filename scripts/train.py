@@ -318,29 +318,57 @@ def resolve_checkpoint_paths(
     checkpoint_cfg: Dict[str, Any],
 ) -> Dict[str, Path]:
     base_dir = Path(checkpoint_cfg.get("base_dir", "checkpoints"))
+
     dataset_name = experiment_cfg["dataset_name"]
     model_name = experiment_cfg["model_name"]
     routing_type = experiment_cfg["routing_type"]
     run_name = experiment_cfg["run_name"]
 
-    ckpt_dir = base_dir / dataset_name / model_name / routing_type
+    main_exp = experiment_cfg.get("main_experiment_name", "default")
+    sub_exp = experiment_cfg.get("sub_experiment_name", None)
+
+    if sub_exp:
+        ckpt_dir = (
+            base_dir
+            / main_exp
+            / sub_exp
+            / dataset_name
+            / model_name
+            / routing_type
+            / run_name
+        )
+    else:
+        ckpt_dir = (
+            base_dir
+            / main_exp
+            / dataset_name
+            / model_name
+            / routing_type
+            / run_name
+        )
+
     ckpt_dir.mkdir(parents=True, exist_ok=True)
 
     best_name = checkpoint_cfg.get(
-        "best_name_template", "best_{run_name}.pt"
+        "best_name_template", "best.pt"
     ).format(
         run_name=run_name,
         dataset_name=dataset_name,
         model_name=model_name,
         routing_type=routing_type,
+        main_experiment_name=main_exp,
+        sub_experiment_name=sub_exp or "none",
     )
+
     latest_name = checkpoint_cfg.get(
-        "latest_name_template", "latest_{run_name}.pt"
+        "latest_name_template", "latest.pt"
     ).format(
         run_name=run_name,
         dataset_name=dataset_name,
         model_name=model_name,
         routing_type=routing_type,
+        main_experiment_name=main_exp,
+        sub_experiment_name=sub_exp or "none",
     )
 
     return {
@@ -348,7 +376,6 @@ def resolve_checkpoint_paths(
         "best": ckpt_dir / best_name,
         "latest": ckpt_dir / latest_name,
     }
-
 
 # ============================================================
 # Data
@@ -1215,6 +1242,7 @@ def main() -> None:
     routing_cfg = _get_required_section(config, "routing")
     lif_exc_cfg = _get_required_section(config, "lif_exc")
     lif_inh_cfg = _get_required_section(config, "lif_inh")
+    classifier_cfg = config.get("classifier", {})
     training_cfg = _get_required_section(config, "training")
     position_cfg = config.get("position", {})
 
@@ -1297,6 +1325,7 @@ def main() -> None:
         routing_cfg=routing_cfg,
         lif_exc_cfg=lif_exc_cfg,
         lif_inh_cfg=lif_inh_cfg,
+        classifier_cfg=classifier_cfg,
         position_cfg=position_cfg,
     ).to(device)
 
