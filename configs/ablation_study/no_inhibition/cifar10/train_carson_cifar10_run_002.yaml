@@ -1,6 +1,6 @@
 experiment:
   main_experiment_name: ablation_study
-  sub_experiment_name: no_adaptive
+  sub_experiment_name: no_inhibition
   dataset_name: cifar10
   model_name: cats
   routing_type: carson
@@ -26,7 +26,7 @@ model:
   spiking:
     enabled: true
   inhibition:
-    enabled: true
+    enabled: false
   kwargs: 
       use_shared_projection: true
 
@@ -64,7 +64,7 @@ lif_exc:
     max: 1.2
     init: 0.65
   adaptive_threshold:
-    enabled: false
+    enabled: true
     mode: shared
     init: 0.0
     decay: 0.97
@@ -90,7 +90,7 @@ lif_inh:
     max: 0.9
     init: 0.55
   adaptive_threshold:
-    enabled: false
+    enabled: true
     mode: shared
     init: 0.0
     decay: 0.96
@@ -108,10 +108,6 @@ classifier:
     dropout: 0.0
     readout: mean_membrane
 
-<<<<<<< HEAD
-=======
-
->>>>>>> 6e83f5480c91f51a84ba7b6bd3ec64ddacaf4946
 training:
   seed: 42
   deterministic: false

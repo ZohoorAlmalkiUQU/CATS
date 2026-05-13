@@ -100,6 +100,13 @@ lif_inh:
     detach_spikes: true
 
 classifier:
+<<<<<<< HEAD
+  input_dim: 256
+  kwargs:
+    hidden_dim: null
+    dropout: 0.0
+    use_layernorm: false
+=======
   type: snn
   input_dim: 256
   kwargs:
@@ -107,6 +114,7 @@ classifier:
     threshold: 1.0
     dropout: 0.0
     readout: mean_membrane
+>>>>>>> 6e83f5480c91f51a84ba7b6bd3ec64ddacaf4946
 
 training:
   seed: 42

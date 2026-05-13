@@ -37,7 +37,7 @@ For image-based modalities, we adopt a **native-resolution ViT embedding strateg
 
 | Experiment Name                              | Description                                                                |
 |----------------------------------------------|----------------------------------------------------------------------------|
-| baseline_cats                                | Full CARSON configuration                                                  |
+| full_routing                                 | Full CARSON configuration                                                  |
 | no_positional                                | Remove positional encoding (RoPE disabled)                                 |
 | fixed_tau                                    | Fix membrane time constant (τ), keep threshold and adaptive dynamics       |
 | fixed_threshold                              | Fix base threshold (θ), keep adaptive threshold enabled                    |
