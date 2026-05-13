@@ -3,8 +3,8 @@ experiment:
   sub_experiment_name: no_adaptive
   dataset_name: cifar10
   model_name: cats
-  routing_type: carson
-  run_name: run_002
+  routing_type: linear
+  run_name: run_001
   seed: 42
 
 data:
