@@ -12,6 +12,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
+from torch.utils.data import Subset
 
 from cats.data.dataset import EmbeddingDataset
 from cats.data.collate import collate_embeddings
@@ -380,6 +381,34 @@ def resolve_checkpoint_paths(
 # ============================================================
 # Data
 # ============================================================
+
+def maybe_make_subset(
+    dataset: EmbeddingDataset,
+    sample_fraction: Optional[float] = None,
+    sample_seed: int = 42,
+) -> torch.utils.data.Dataset:
+    if sample_fraction is None:
+        return dataset
+
+    sample_fraction = float(sample_fraction)
+
+    if sample_fraction <= 0.0 or sample_fraction > 1.0:
+        raise ValueError(
+            f"sample_fraction must be in the range (0, 1], got {sample_fraction}"
+        )
+
+    if sample_fraction >= 1.0:
+        return dataset
+
+    n_total = len(dataset)
+    n_subset = max(1, int(n_total * sample_fraction))
+
+    generator = torch.Generator().manual_seed(sample_seed)
+    indices = torch.randperm(n_total, generator=generator)[:n_subset].tolist()
+
+    return Subset(dataset, indices)
+
+
 def build_dataloader(
     path: str,
     batch_size: int,
@@ -388,12 +417,21 @@ def build_dataloader(
     pin_memory: bool,
     max_cached_shards: int = 10,
     validate_on_load: bool = False,
-) -> Tuple[EmbeddingDataset, DataLoader]:
+    sample_fraction: Optional[float] = None,
+    sample_seed: int = 42,
+) -> Tuple[torch.utils.data.Dataset, DataLoader]:
     dataset = EmbeddingDataset(
         path,
         max_cached_shards=max_cached_shards,
         validate_on_load=validate_on_load,
     )
+
+    dataset = maybe_make_subset(
+        dataset=dataset,
+        sample_fraction=sample_fraction,
+        sample_seed=sample_seed,
+    )
+
     loader = DataLoader(
         dataset,
         batch_size=batch_size,
@@ -403,6 +441,7 @@ def build_dataloader(
         collate_fn=collate_embeddings,
         drop_last=False,
     )
+
     return dataset, loader
 
 
@@ -1289,6 +1328,8 @@ def main() -> None:
     pin_memory = bool(training_cfg.get("pin_memory", False)) and device.type == "cuda"
     max_cached_shards = int(training_cfg.get("max_cached_shards", 6))
     validate_on_load = bool(training_cfg.get("validate_on_load", False))
+    sample_fraction = data_cfg.get("sample_fraction", None)
+    sample_seed = int(data_cfg.get("sample_seed", seed))
     grad_clip_norm = training_cfg.get("grad_clip_norm", None)
     grad_clip_norm = float(grad_clip_norm) if grad_clip_norm is not None else None
 
@@ -1307,6 +1348,8 @@ def main() -> None:
         pin_memory=pin_memory,
         max_cached_shards=max_cached_shards,
         validate_on_load=validate_on_load,
+        sample_fraction=sample_fraction,
+        sample_seed=sample_seed,
     )
 
     val_dataset, val_loader = build_dataloader(
@@ -1317,6 +1360,8 @@ def main() -> None:
         pin_memory=pin_memory,
         max_cached_shards=max_cached_shards,
         validate_on_load=validate_on_load,
+        sample_fraction=sample_fraction,
+        sample_seed=sample_seed,
     )
 
     model = build_model(
@@ -1343,10 +1388,13 @@ def main() -> None:
 
     dataset_summary = {
         "dataset_name": dataset_name,
-        "train": train_dataset.summary(),
-        "val": val_dataset.summary(),
+        "train_samples": len(train_dataset),
+        "val_samples": len(val_dataset),
+        "sample_fraction": sample_fraction,
+        "sample_seed": sample_seed,
         "test_path": test_path,
     }
+
     save_json(dataset_summary, log_dir / "dataset_summary.json")
 
     run_info = {
@@ -1362,6 +1410,8 @@ def main() -> None:
         "test_path": test_path,
         "train_samples": len(train_dataset),
         "val_samples": len(val_dataset),
+        "sample_fraction": sample_fraction,
+        "sample_seed": sample_seed,
         "batch_size": batch_size,
         "num_workers": num_workers,
         "best_checkpoint_path": str(ckpt_paths["best"]),
@@ -1379,6 +1429,7 @@ def main() -> None:
         },
         "resume_enabled": bool(args.resume),
     }
+
     save_json(run_info, log_dir / "run_info.json")
 
     print("=" * 100)
@@ -1391,6 +1442,10 @@ def main() -> None:
     print(f"Device         : {device}")
     print(f"Train path     : {train_path}")
     print(f"Val path       : {val_path}")
+    print(f"Train samples  : {len(train_dataset)}")
+    print(f"Val samples    : {len(val_dataset)}")
+    print(f"Sample fraction: {sample_fraction}")
+    print(f"Sample seed    : {sample_seed}")
     print(f"Log dir        : {log_dir}")
     print(f"Checkpoint dir : {ckpt_paths['dir']}")
     print(

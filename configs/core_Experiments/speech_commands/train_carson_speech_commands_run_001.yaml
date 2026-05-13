@@ -16,6 +16,10 @@ data:
   num_workers: 0
   pin_memory: true
 
+  # Diagnostic subset control
+  sample_fraction: 1
+  sample_seed: 42
+
 model:
   class_path: cats.model.CATSClassifier
   embedding_dim: 768

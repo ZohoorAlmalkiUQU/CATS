@@ -12,6 +12,8 @@ def main() -> None:
 
     experiment_root = project_root / "configs" / "ablation_study"
 
+    resume = True
+
     experiments = [
         "fixed_threshold",
         # "fixed_tau",
@@ -20,7 +22,7 @@ def main() -> None:
         # "fixed_tau_fixed_threshold_no_adaptive",
         # "no_inhibition",
         # "no_spiking",
-        # "no_positional"
+        # "no_positional",
     ]
 
     dataset_name = "speech_commands"
@@ -33,7 +35,7 @@ def main() -> None:
             raise FileNotFoundError(f"Config not found: {config_path}")
 
         print("=" * 100)
-        print(f"Running experiment: {exp_name}")
+        print(f"{'Resuming' if resume else 'Running'} experiment: {exp_name}")
         print(f"Config: {config_path}")
         print("=" * 100)
 
@@ -43,6 +45,9 @@ def main() -> None:
             "--config",
             str(config_path),
         ]
+
+        if resume:
+            cmd.append("--resume")
 
         subprocess.run(cmd, cwd=project_root, check=True)
 
