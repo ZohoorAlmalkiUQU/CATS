@@ -1,7 +1,7 @@
 experiment:
   main_experiment_name: ablation_study
-  sub_experiment_name: fixed_tau_fixed_threshold
-  dataset_name: cifar10
+  sub_experiment_name: fixed_tau_fixed_threshold_no_adaptive
+  dataset_name: speech_commands
   model_name: cats
   routing_type: carson
   run_name: run_001
@@ -20,7 +20,7 @@ model:
   class_path: cats.model.CATSClassifier
   embedding_dim: 768
   hidden_dim: 256
-  num_classes: 10
+  num_classes: 35
   excitatory_ratio: 0.5
   num_groups: 2
   spiking:
@@ -64,7 +64,7 @@ lif_exc:
     max: 1.2
     init: 0.65
   adaptive_threshold:
-    enabled: true
+    enabled: false
     mode: shared
     init: 0.0
     decay: 0.97
@@ -90,7 +90,7 @@ lif_inh:
     max: 0.9
     init: 0.55
   adaptive_threshold:
-    enabled: true
+    enabled: false
     mode: shared
     init: 0.0
     decay: 0.96
