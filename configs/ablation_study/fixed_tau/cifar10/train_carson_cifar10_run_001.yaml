@@ -3,11 +3,7 @@ experiment:
   sub_experiment_name: fixed_tau
   dataset_name: cifar10
   model_name: cats
-<<<<<<< HEAD
   routing_type: carson
-=======
-  routing_type: linear
->>>>>>> 6e83f5480c91f51a84ba7b6bd3ec64ddacaf4946
   run_name: run_001
   seed: 42
 
@@ -104,25 +100,12 @@ lif_inh:
     detach_spikes: true
 
 classifier:
-<<<<<<< HEAD
   type: ann
-=======
-<<<<<<< HEAD
-  type: ann
-  input_dim: 256
-  kwargs:
-    tau: 2.0
-    threshold: 1.0
-    dropout: 0.0
-    readout: mean_membrane
-=======
->>>>>>> e488b7d785e56d1fe62082f5ea82d69aaf3846ad
   input_dim: 256
   kwargs:
     hidden_dim: null
     dropout: 0.0
     use_layernorm: false
->>>>>>> 6e83f5480c91f51a84ba7b6bd3ec64ddacaf4946
 
 training:
   seed: 42
