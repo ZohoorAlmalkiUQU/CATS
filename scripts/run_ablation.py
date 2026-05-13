@@ -15,11 +15,11 @@ def main() -> None:
     resume = True
 
     experiments = [
-        "fixed_threshold",
-        # "fixed_tau",
-        # "fixed_tau_fixed_threshold",
-        # "no_adaptive",
-        # "fixed_tau_fixed_threshold_no_adaptive",
+        # "fixed_threshold",
+        "fixed_tau",
+        "fixed_tau_fixed_threshold",
+        "no_adaptive",
+        "fixed_tau_fixed_threshold_no_adaptive",
         # "no_inhibition",
         # "no_spiking",
         # "no_positional",
