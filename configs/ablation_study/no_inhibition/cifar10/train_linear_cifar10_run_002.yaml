@@ -1,9 +1,9 @@
 experiment:
   main_experiment_name: ablation_study
-  sub_experiment_name: fixed_tau
+  sub_experiment_name: no_inhibition
   dataset_name: cifar10
   model_name: cats
-  routing_type: carson
+  routing_type: linear
   run_name: run_001
   seed: 42
 
@@ -26,7 +26,7 @@ model:
   spiking:
     enabled: true
   inhibition:
-    enabled: true
+    enabled: false
   kwargs: 
       use_shared_projection: true
 
@@ -52,7 +52,7 @@ lif_exc:
   reset_to_zero: true
   detach_reset: false
   tau:
-    learnable: false
+    learnable: true
     mode: shared
     min: 14.0
     max: 28.0
@@ -78,7 +78,7 @@ lif_inh:
   reset_to_zero: true
   detach_reset: false
   tau:
-    learnable: false
+    learnable: true
     mode: shared
     min: 6.0
     max: 14.0
@@ -100,11 +100,13 @@ lif_inh:
     detach_spikes: true
 
 classifier:
+  type: snn
   input_dim: 256
   kwargs:
-    hidden_dim: null
+    tau: 2.0
+    threshold: 1.0
     dropout: 0.0
-    use_layernorm: false
+    readout: mean_membrane
 
 training:
   seed: 42

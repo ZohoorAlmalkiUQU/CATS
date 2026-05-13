@@ -34,17 +34,10 @@ def main() -> None:
     #         base_config_path / "speech_commands" / "train_linear_speech_commands_run_001.yaml",
     #     ],
         "cifar10": [
-<<<<<<< HEAD
-            base_config_path / "cifar10" / "train_carson_cifar10_run_002.yaml",
-    #         base_config_path / "cifar10" / "train_carson_cifar10_run_001.yaml",
-    #         base_config_path / "cifar10" / "train_identity_cifar10_run_001.yaml",
-    #         base_config_path / "cifar10" / "train_linear_cifar10_run_001.yaml",
-=======
     #         base_config_path / "cifar10" / "train_carson_cifar10_run_002.yaml",
     #         base_config_path / "cifar10" / "train_carson_cifar10_run_001.yaml",
     #         base_config_path / "cifar10" / "train_identity_cifar10_run_001.yaml",
-              base_config_path / "cifar10" / "train_linear_cifar10_run_002.yaml",
->>>>>>> 6e83f5480c91f51a84ba7b6bd3ec64ddacaf4946
+    #         base_config_path / "cifar10" / "train_linear_cifar10_run_001.yaml",
         ],
     #     "mnist": [
     #         base_config_path / "mnist" / "train_carson_mnist_run_001.yaml",

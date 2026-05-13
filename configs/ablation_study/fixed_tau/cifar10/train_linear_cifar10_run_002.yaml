@@ -4,11 +4,7 @@ experiment:
   dataset_name: cifar10
   model_name: cats
   routing_type: linear
-<<<<<<< HEAD
-  run_name: run_001
-=======
   run_name: run_002
->>>>>>> 6e83f5480c91f51a84ba7b6bd3ec64ddacaf4946
   seed: 42
 
 data:
@@ -104,11 +100,7 @@ lif_inh:
     detach_spikes: true
 
 classifier:
-<<<<<<< HEAD
-  type: snn
-=======
   type: snn 
->>>>>>> 6e83f5480c91f51a84ba7b6bd3ec64ddacaf4946
   input_dim: 256
   kwargs:
     tau: 2.0

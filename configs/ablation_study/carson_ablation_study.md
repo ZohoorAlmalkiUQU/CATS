@@ -1,5 +1,7 @@
 # **CARSON Ablation Study (RQ3)**
 
+> TODO: I added the snn classifier But this experements build on the old experements when the classifier ANN
+
 **RQ3 (Component Attribution):**  
     Which components of the CATS framework (e.g., positional encoding, adaptive thresholding, inhibition) are responsible for the observed performance gains?
 
