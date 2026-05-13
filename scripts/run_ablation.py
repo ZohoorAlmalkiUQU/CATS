@@ -13,18 +13,18 @@ def main() -> None:
     experiment_root = project_root / "configs" / "ablation_study"
 
     experiments = [
+        "fixed_threshold",
         # "fixed_tau",
-        # "fixed_threshold",
         # "fixed_tau_fixed_threshold",
-        "no_adaptive",
+        # "no_adaptive",
         # "fixed_tau_fixed_threshold_no_adaptive",
         # "no_inhibition",
         # "no_spiking",
         # "no_positional"
     ]
 
-    dataset_name = "cifar10"
-    config_name = "train_carson_cifar10_run_002.yaml"
+    dataset_name = "speech_commands"
+    config_name = f"train_carson_{dataset_name}_run_001.yaml"
 
     for exp_name in experiments:
         config_path = experiment_root / exp_name / dataset_name / config_name

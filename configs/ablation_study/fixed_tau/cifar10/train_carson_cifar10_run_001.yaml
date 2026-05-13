@@ -100,6 +100,7 @@ lif_inh:
     detach_spikes: true
 
 classifier:
+  type: ann
   input_dim: 256
   kwargs:
     hidden_dim: null

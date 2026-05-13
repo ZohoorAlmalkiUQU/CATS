@@ -103,8 +103,9 @@ classifier:
   type: ann
   input_dim: 256
   kwargs:
-    hidden_dim: 128
+    hidden_dim: null
     dropout: 0.0
+    use_layernorm: false
 
 training:
   seed: 42
