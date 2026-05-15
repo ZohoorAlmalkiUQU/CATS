@@ -178,6 +178,7 @@ def build_model(
     )
 
     lif_inh = None
+
     if inhibition_enabled:
         lif_inh = build_lif_module(
             lif_inh_cfg,
@@ -185,7 +186,7 @@ def build_model(
             num_groups=1,
         )
 
-        model = ModelClass(
+    model = ModelClass(
         embedding_dim=embedding_dim,
         hidden_dim=hidden_dim,
         num_classes=num_classes,
