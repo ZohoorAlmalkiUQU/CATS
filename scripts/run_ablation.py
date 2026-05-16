@@ -4,7 +4,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 def main() -> None:
     project_root = Path(__file__).resolve().parents[1]
     train_script = project_root / "scripts" / "train.py"
@@ -14,19 +13,20 @@ def main() -> None:
 
     resume = True
 
+    # python scripts/run_ablation.py
     experiments = [
-        # "fixed_threshold",
+        "fixed_threshold",
         "fixed_tau",
         "fixed_tau_fixed_threshold",
         "no_adaptive",
         "fixed_tau_fixed_threshold_no_adaptive",
-        # "no_inhibition",
-        # "no_spiking",
-        # "no_positional",
+        "no_inhibition",
+        "no_spiking",
+        "no_positional",
     ]
 
     dataset_name = "speech_commands"
-    config_name = f"train_carson_{dataset_name}_run_001.yaml"
+    config_name = f"train_identity_{dataset_name}_run_001.yaml"
 
     for exp_name in experiments:
         config_path = experiment_root / exp_name / dataset_name / config_name

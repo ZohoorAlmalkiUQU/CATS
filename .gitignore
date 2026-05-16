@@ -20,7 +20,8 @@ dist/
 # ==============================
 # Virtual Environments
 # ==============================
-cats-env
+cats-env/
+analysis-env/
 .venv/
 venv/
 env/
@@ -70,6 +71,7 @@ data/processed/
 # ==============================
 .vscode/
 .idea/
+.claude/
 
 # ==============================
 # macOS
@@ -93,3 +95,8 @@ htmlcov/
 # Archives files (old codes, old logs, etc.)
 # ==============================
 archive/
+
+# ==============================
+# TODO List file
+# ==============================
+TODO.md # this file contains the list of TODOs for the project. Just for me to keep track of what I need to do. Not important for others.

@@ -123,8 +123,8 @@ training:
   early_stopping_patience: 3
   early_stopping_min_delta: 0.0001
   grad_clip_norm: 5.0
-  lambda_balance: 0.0
-  lambda_entropy: 0.000
+  lambda_balance: 0.2
+  lambda_entropy: 0.001
 
 logging:
   base_dir: logs

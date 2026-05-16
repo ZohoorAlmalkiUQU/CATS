@@ -1,6 +1,6 @@
 experiment:
   main_experiment_name: core_experiments
-  sub_experiment_name: null
+  sub_experiment_name: full_routing
   dataset_name: sst2
   model_name: cats
   routing_type: identity
