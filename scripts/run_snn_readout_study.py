@@ -33,12 +33,12 @@ from pathlib import Path
 
 
 READOUT_VARIANTS = [
-    "mean_membrane",
+    # "mean_membrane",
     "last_membrane",
     "mean_spikes",
-    "spike_count",
-    "membrane_spike_hybrid",
-    "temporal_pool",
+    # "spike_count",
+    # "membrane_spike_hybrid",
+    # "temporal_pool",
 ]
 
 CONFIG_TEMPLATE = "train_carson_{dataset}_{readout}.yaml"

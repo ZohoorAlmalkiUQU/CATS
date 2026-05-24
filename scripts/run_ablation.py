@@ -15,18 +15,18 @@ def main() -> None:
 
     # python scripts/run_ablation.py
     experiments = [
-        # "fixed_threshold",
+        "fixed_threshold",
         # "fixed_tau",
         # "fixed_tau_fixed_threshold",
         # "no_adaptive",
         # "fixed_tau_fixed_threshold_no_adaptive",
         # "no_inhibition",
         # "no_spiking",
-        "no_positional",
+        # "no_positional",
     ]
 
     dataset_name = "speech_commands"
-    config_name = f"train_identity_{dataset_name}_run_001.yaml"
+    config_name = f"train_carson_{dataset_name}_run_001.yaml"
 
     for exp_name in experiments:
         config_path = experiment_root / exp_name / dataset_name / config_name
