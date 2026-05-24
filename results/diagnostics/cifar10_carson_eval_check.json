@@ -1,0 +1,935 @@
+{
+  "checkpoint": {
+    "path": "checkpoints\\core_experiments\\full_routing\\cifar10\\cats\\carson\\run_001\\best_run_001.pt",
+    "device": "cuda",
+    "best_val_f1": 0.6754906131944934,
+    "best_epoch": 5,
+    "last_epoch": 5,
+    "has_model_state_dict": true,
+    "has_config": true
+  },
+  "config_summary": {
+    "dataset_name": "cifar10",
+    "routing_type": "carson",
+    "run_name": "run_001",
+    "num_classes": 10,
+    "embedding_dim": 768,
+    "hidden_dim": 256,
+    "spiking_enabled": true,
+    "inhibition_enabled": true,
+    "classifier_present": true,
+    "classifier_cfg": {
+      "input_dim": 256,
+      "kwargs": {
+        "hidden_dim": null,
+        "dropout": 0.0,
+        "use_layernorm": false
+      }
+    },
+    "routing_cfg_keys": [
+      "kwargs"
+    ],
+    "position_cfg": {
+      "use": true,
+      "type": "rope",
+      "kwargs": {
+        "base": 10000.0
+      }
+    },
+    "processed_root": "data/processed",
+    "train_split": "train",
+    "val_split": "validation",
+    "test_split": "test"
+  },
+  "model_load": {
+    "weights_loaded": "strict",
+    "original_routing_type": "carson",
+    "effective_routing_type": "carson",
+    "num_parameters": 2173713,
+    "num_trainable_parameters": 2173713
+  },
+  "splits": {
+    "val": {
+      "split": "val",
+      "data_path": "data\\processed\\cifar10\\validation",
+      "dataset_report": {
+        "num_samples": 5000,
+        "inspected_items": 2000,
+        "first_item_keys": [
+          "attention_mask",
+          "embedding",
+          "index",
+          "label",
+          "local_index",
+          "shard_index"
+        ],
+        "first_item_shapes": {
+          "embedding": [
+            65,
+            768
+          ],
+          "attention_mask": [
+            65
+          ],
+          "index": "int",
+          "shard_index": "int",
+          "local_index": "int",
+          "label": []
+        },
+        "label_distribution_sample": {},
+        "num_unique_labels_sample": 0,
+        "seq_len_min_sample": null,
+        "seq_len_max_sample": null,
+        "seq_len_mean_sample": null,
+        "embedding_mean_avg_sample": null,
+        "embedding_std_avg_sample": null
+      },
+      "batch_size": 32,
+      "max_batches": null,
+      "evaluated_samples": 5000,
+      "valid_labeled_samples": 5000,
+      "model_output_keys": [
+        "agreement",
+        "beta",
+        "context_vector",
+        "exc_adaptive_threshold",
+        "exc_beta",
+        "exc_current",
+        "exc_effective_threshold",
+        "exc_features",
+        "exc_group_assignments",
+        "exc_membrane",
+        "exc_spikes",
+        "exc_tau",
+        "exc_threshold",
+        "group_assignments",
+        "group_prototypes",
+        "grouped_current",
+        "inh_adaptive_threshold",
+        "inh_beta",
+        "inh_current",
+        "inh_effective_threshold",
+        "inh_features",
+        "inh_group_assignments",
+        "inh_membrane",
+        "inh_spikes",
+        "inh_tau",
+        "inh_threshold",
+        "logits",
+        "membrane",
+        "pooled_exc",
+        "pooled_features",
+        "pooled_inh",
+        "pooled_subtractive",
+        "preds",
+        "probs",
+        "routed_embeddings",
+        "routing_confidence",
+        "routing_logits",
+        "routing_weights",
+        "shared_features",
+        "spikes",
+        "tau",
+        "threshold"
+      ],
+      "first_batch_shapes": {
+        "embeddings": [
+          32,
+          65,
+          768
+        ],
+        "attention_mask": [
+          32,
+          65
+        ],
+        "outputs.logits": [
+          32,
+          10
+        ],
+        "outputs.pooled_features": [
+          32,
+          256
+        ],
+        "outputs.routed_embeddings": [
+          32,
+          65,
+          768
+        ],
+        "outputs.shared_features": [
+          32,
+          65,
+          256
+        ],
+        "outputs.exc_features": [
+          32,
+          65,
+          128
+        ],
+        "outputs.inh_features": [
+          32,
+          65,
+          128
+        ],
+        "outputs.exc_current": [
+          32,
+          65,
+          128
+        ],
+        "outputs.inh_current": [
+          32,
+          65,
+          128
+        ],
+        "outputs.grouped_current": [
+          32,
+          65,
+          256
+        ],
+        "outputs.group_assignments": [
+          256
+        ],
+        "outputs.exc_group_assignments": [
+          128
+        ],
+        "outputs.inh_group_assignments": [
+          128
+        ],
+        "outputs.exc_spikes": [
+          32,
+          65,
+          128
+        ],
+        "outputs.inh_spikes": [
+          32,
+          65,
+          128
+        ],
+        "outputs.spikes": [
+          32,
+          65,
+          256
+        ],
+        "outputs.exc_membrane": [
+          32,
+          65,
+          128
+        ],
+        "outputs.inh_membrane": [
+          32,
+          65,
+          128
+        ],
+        "outputs.membrane": [
+          32,
+          65,
+          256
+        ],
+        "outputs.pooled_exc": [
+          32,
+          128
+        ],
+        "outputs.pooled_inh": [
+          32,
+          128
+        ],
+        "outputs.pooled_subtractive": [
+          32,
+          1
+        ],
+        "outputs.exc_beta": [
+          128
+        ],
+        "outputs.inh_beta": [
+          128
+        ],
+        "outputs.beta": [
+          256
+        ],
+        "outputs.exc_tau": [
+          128
+        ],
+        "outputs.inh_tau": [
+          128
+        ],
+        "outputs.tau": [
+          256
+        ],
+        "outputs.exc_threshold": [
+          128
+        ],
+        "outputs.inh_threshold": [
+          128
+        ],
+        "outputs.threshold": [
+          256
+        ],
+        "outputs.exc_effective_threshold": [
+          32,
+          65,
+          128
+        ],
+        "outputs.inh_effective_threshold": [
+          32,
+          65,
+          128
+        ],
+        "outputs.exc_adaptive_threshold": [
+          32,
+          65,
+          128
+        ],
+        "outputs.inh_adaptive_threshold": [
+          32,
+          65,
+          128
+        ],
+        "outputs.routing_weights": [
+          32,
+          65,
+          2
+        ],
+        "outputs.routing_logits": [
+          32,
+          65,
+          2
+        ],
+        "outputs.routing_confidence": [
+          32,
+          65
+        ],
+        "outputs.context_vector": [
+          32,
+          768
+        ],
+        "outputs.agreement": "NoneType",
+        "outputs.group_prototypes": "NoneType",
+        "outputs.probs": [
+          32,
+          10
+        ],
+        "outputs.preds": [
+          32
+        ]
+      },
+      "unlabeled": false,
+      "loss": 4.615213272857666,
+      "accuracy": 0.2290000021457672,
+      "macro_f1": 0.1964674551123757,
+      "macro_recall": 0.22719772713613812,
+      "label_distribution": {
+        "0": 488,
+        "1": 512,
+        "2": 532,
+        "3": 471,
+        "4": 471,
+        "5": 514,
+        "6": 507,
+        "7": 500,
+        "8": 504,
+        "9": 501
+      },
+      "prediction_distribution": {
+        "0": 600,
+        "1": 3568,
+        "2": 149,
+        "3": 54,
+        "4": 63,
+        "5": 9,
+        "6": 293,
+        "7": 55,
+        "8": 63,
+        "9": 146
+      },
+      "confidence_mean": 0.811377763748169,
+      "confidence_min": 0.16951654851436615,
+      "confidence_max": 0.9999997615814209,
+      "confusion_matrix": [
+        [
+          259,
+          173,
+          13,
+          5,
+          9,
+          0,
+          21,
+          0,
+          7,
+          1
+        ],
+        [
+          6,
+          473,
+          6,
+          0,
+          4,
+          0,
+          10,
+          3,
+          1,
+          9
+        ],
+        [
+          91,
+          329,
+          63,
+          2,
+          4,
+          0,
+          34,
+          0,
+          1,
+          8
+        ],
+        [
+          23,
+          397,
+          9,
+          17,
+          3,
+          0,
+          12,
+          1,
+          0,
+          9
+        ],
+        [
+          36,
+          364,
+          15,
+          6,
+          18,
+          0,
+          21,
+          5,
+          0,
+          6
+        ],
+        [
+          19,
+          430,
+          8,
+          12,
+          3,
+          8,
+          20,
+          1,
+          1,
+          12
+        ],
+        [
+          8,
+          336,
+          11,
+          6,
+          0,
+          0,
+          139,
+          1,
+          2,
+          4
+        ],
+        [
+          47,
+          357,
+          12,
+          5,
+          13,
+          0,
+          8,
+          43,
+          1,
+          14
+        ],
+        [
+          94,
+          321,
+          9,
+          1,
+          7,
+          1,
+          21,
+          0,
+          46,
+          4
+        ],
+        [
+          17,
+          388,
+          3,
+          0,
+          2,
+          0,
+          7,
+          1,
+          4,
+          79
+        ]
+      ],
+      "per_class_recall": {
+        "0": 0.5307377049180327,
+        "1": 0.923828125,
+        "2": 0.11842105263157894,
+        "3": 0.036093418259023353,
+        "4": 0.03821656050955414,
+        "5": 0.01556420233463035,
+        "6": 0.27416173570019725,
+        "7": 0.086,
+        "8": 0.09126984126984126,
+        "9": 0.15768463073852296
+      },
+      "per_class_f1": {
+        "0": 0.47610294117647056,
+        "1": 0.23186274509803922,
+        "2": 0.18502202643171806,
+        "3": 0.06476190476190476,
+        "4": 0.06741573033707865,
+        "5": 0.030592734225621417,
+        "6": 0.34750000000000003,
+        "7": 0.15495495495495495,
+        "8": 0.16225749559082892,
+        "9": 0.24420401854714063
+      }
+    },
+    "test": {
+      "split": "test",
+      "data_path": "data\\processed\\cifar10\\test",
+      "dataset_report": {
+        "num_samples": 10000,
+        "inspected_items": 2000,
+        "first_item_keys": [
+          "attention_mask",
+          "embedding",
+          "index",
+          "label",
+          "local_index",
+          "shard_index"
+        ],
+        "first_item_shapes": {
+          "embedding": [
+            65,
+            768
+          ],
+          "attention_mask": [
+            65
+          ],
+          "index": "int",
+          "shard_index": "int",
+          "local_index": "int",
+          "label": []
+        },
+        "label_distribution_sample": {},
+        "num_unique_labels_sample": 0,
+        "seq_len_min_sample": null,
+        "seq_len_max_sample": null,
+        "seq_len_mean_sample": null,
+        "embedding_mean_avg_sample": null,
+        "embedding_std_avg_sample": null
+      },
+      "batch_size": 32,
+      "max_batches": null,
+      "evaluated_samples": 10000,
+      "valid_labeled_samples": 10000,
+      "model_output_keys": [
+        "agreement",
+        "beta",
+        "context_vector",
+        "exc_adaptive_threshold",
+        "exc_beta",
+        "exc_current",
+        "exc_effective_threshold",
+        "exc_features",
+        "exc_group_assignments",
+        "exc_membrane",
+        "exc_spikes",
+        "exc_tau",
+        "exc_threshold",
+        "group_assignments",
+        "group_prototypes",
+        "grouped_current",
+        "inh_adaptive_threshold",
+        "inh_beta",
+        "inh_current",
+        "inh_effective_threshold",
+        "inh_features",
+        "inh_group_assignments",
+        "inh_membrane",
+        "inh_spikes",
+        "inh_tau",
+        "inh_threshold",
+        "logits",
+        "membrane",
+        "pooled_exc",
+        "pooled_features",
+        "pooled_inh",
+        "pooled_subtractive",
+        "preds",
+        "probs",
+        "routed_embeddings",
+        "routing_confidence",
+        "routing_logits",
+        "routing_weights",
+        "shared_features",
+        "spikes",
+        "tau",
+        "threshold"
+      ],
+      "first_batch_shapes": {
+        "embeddings": [
+          32,
+          65,
+          768
+        ],
+        "attention_mask": [
+          32,
+          65
+        ],
+        "outputs.logits": [
+          32,
+          10
+        ],
+        "outputs.pooled_features": [
+          32,
+          256
+        ],
+        "outputs.routed_embeddings": [
+          32,
+          65,
+          768
+        ],
+        "outputs.shared_features": [
+          32,
+          65,
+          256
+        ],
+        "outputs.exc_features": [
+          32,
+          65,
+          128
+        ],
+        "outputs.inh_features": [
+          32,
+          65,
+          128
+        ],
+        "outputs.exc_current": [
+          32,
+          65,
+          128
+        ],
+        "outputs.inh_current": [
+          32,
+          65,
+          128
+        ],
+        "outputs.grouped_current": [
+          32,
+          65,
+          256
+        ],
+        "outputs.group_assignments": [
+          256
+        ],
+        "outputs.exc_group_assignments": [
+          128
+        ],
+        "outputs.inh_group_assignments": [
+          128
+        ],
+        "outputs.exc_spikes": [
+          32,
+          65,
+          128
+        ],
+        "outputs.inh_spikes": [
+          32,
+          65,
+          128
+        ],
+        "outputs.spikes": [
+          32,
+          65,
+          256
+        ],
+        "outputs.exc_membrane": [
+          32,
+          65,
+          128
+        ],
+        "outputs.inh_membrane": [
+          32,
+          65,
+          128
+        ],
+        "outputs.membrane": [
+          32,
+          65,
+          256
+        ],
+        "outputs.pooled_exc": [
+          32,
+          128
+        ],
+        "outputs.pooled_inh": [
+          32,
+          128
+        ],
+        "outputs.pooled_subtractive": [
+          32,
+          1
+        ],
+        "outputs.exc_beta": [
+          128
+        ],
+        "outputs.inh_beta": [
+          128
+        ],
+        "outputs.beta": [
+          256
+        ],
+        "outputs.exc_tau": [
+          128
+        ],
+        "outputs.inh_tau": [
+          128
+        ],
+        "outputs.tau": [
+          256
+        ],
+        "outputs.exc_threshold": [
+          128
+        ],
+        "outputs.inh_threshold": [
+          128
+        ],
+        "outputs.threshold": [
+          256
+        ],
+        "outputs.exc_effective_threshold": [
+          32,
+          65,
+          128
+        ],
+        "outputs.inh_effective_threshold": [
+          32,
+          65,
+          128
+        ],
+        "outputs.exc_adaptive_threshold": [
+          32,
+          65,
+          128
+        ],
+        "outputs.inh_adaptive_threshold": [
+          32,
+          65,
+          128
+        ],
+        "outputs.routing_weights": [
+          32,
+          65,
+          2
+        ],
+        "outputs.routing_logits": [
+          32,
+          65,
+          2
+        ],
+        "outputs.routing_confidence": [
+          32,
+          65
+        ],
+        "outputs.context_vector": [
+          32,
+          768
+        ],
+        "outputs.agreement": "NoneType",
+        "outputs.group_prototypes": "NoneType",
+        "outputs.probs": [
+          32,
+          10
+        ],
+        "outputs.preds": [
+          32
+        ]
+      },
+      "unlabeled": false,
+      "loss": 4.603648495483398,
+      "accuracy": 0.23170000314712524,
+      "macro_f1": 0.20160466088905055,
+      "macro_recall": 0.23170000000000002,
+      "label_distribution": {
+        "0": 1000,
+        "1": 1000,
+        "2": 1000,
+        "3": 1000,
+        "4": 1000,
+        "5": 1000,
+        "6": 1000,
+        "7": 1000,
+        "8": 1000,
+        "9": 1000
+      },
+      "prediction_distribution": {
+        "0": 1188,
+        "1": 7119,
+        "2": 278,
+        "3": 100,
+        "4": 127,
+        "5": 22,
+        "6": 649,
+        "7": 111,
+        "8": 112,
+        "9": 294
+      },
+      "confidence_mean": 0.814593493938446,
+      "confidence_min": 0.17513583600521088,
+      "confidence_max": 0.9999983310699463,
+      "confusion_matrix": [
+        [
+          530,
+          375,
+          19,
+          4,
+          12,
+          1,
+          40,
+          4,
+          8,
+          7
+        ],
+        [
+          17,
+          929,
+          9,
+          1,
+          3,
+          0,
+          23,
+          0,
+          2,
+          16
+        ],
+        [
+          151,
+          636,
+          107,
+          13,
+          11,
+          2,
+          67,
+          0,
+          0,
+          13
+        ],
+        [
+          41,
+          845,
+          14,
+          31,
+          6,
+          1,
+          40,
+          1,
+          3,
+          18
+        ],
+        [
+          80,
+          770,
+          34,
+          7,
+          50,
+          0,
+          48,
+          5,
+          0,
+          6
+        ],
+        [
+          32,
+          849,
+          23,
+          19,
+          6,
+          15,
+          34,
+          4,
+          1,
+          17
+        ],
+        [
+          29,
+          635,
+          16,
+          6,
+          6,
+          1,
+          299,
+          0,
+          0,
+          8
+        ],
+        [
+          111,
+          678,
+          32,
+          10,
+          15,
+          2,
+          26,
+          96,
+          2,
+          28
+        ],
+        [
+          158,
+          650,
+          18,
+          5,
+          10,
+          0,
+          52,
+          0,
+          93,
+          14
+        ],
+        [
+          39,
+          752,
+          6,
+          4,
+          8,
+          0,
+          20,
+          1,
+          3,
+          167
+        ]
+      ],
+      "per_class_recall": {
+        "0": 0.53,
+        "1": 0.929,
+        "2": 0.107,
+        "3": 0.031,
+        "4": 0.05,
+        "5": 0.015,
+        "6": 0.299,
+        "7": 0.096,
+        "8": 0.093,
+        "9": 0.167
+      },
+      "per_class_f1": {
+        "0": 0.4844606946983547,
+        "1": 0.22884591698485038,
+        "2": 0.1674491392801252,
+        "3": 0.05636363636363637,
+        "4": 0.08873114463176576,
+        "5": 0.029354207436399212,
+        "6": 0.3626440266828381,
+        "7": 0.17281728172817284,
+        "8": 0.1672661870503597,
+        "9": 0.25811437403400306
+      }
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "confusion_matrix": [
+    [
+      339,
+      89
+    ],
+    [
+      60,
+      384
+    ]
+  ],
+  "num_classes": 2
+}
