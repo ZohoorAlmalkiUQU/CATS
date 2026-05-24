@@ -1,10 +1,10 @@
 experiment:
-  main_experiment_name: core_experiments
-  sub_experiment_name: full_routing
-  dataset_name: cifar10
+  main_experiment_name: snn_readout_study
+  sub_experiment_name: spike_count
+  dataset_name: speech_commands
   model_name: cats
-  routing_type: linear
-  run_name: run_002
+  routing_type: carson
+  run_name: run_001
   seed: 42
 
 data:
@@ -15,36 +15,39 @@ data:
   has_test: true
   num_workers: 0
   pin_memory: true
+  sample_fraction: 1
+  sample_seed: 42
 
 model:
   class_path: cats.model.CATSClassifier
   embedding_dim: 768
   hidden_dim: 256
-  num_classes: 10
+  num_classes: 35
   excitatory_ratio: 0.5
   num_groups: 2
   spiking:
     enabled: true
   inhibition:
     enabled: true
-  kwargs: 
-      use_shared_projection: true
-
-routing:
   kwargs:
-    embedding_dim: 768
-    hidden_dim: 256
-    num_groups: 2
-    dropout: 0.1
-    temperature: 1.2
-    use_residual: true
-    use_layernorm: true
+    use_shared_projection: true
 
 position:
   use: true
   type: rope
   kwargs:
     base: 10000.0
+
+routing:
+  kwargs:
+    embedding_dim: 768
+    hidden_dim: 256
+    num_groups: 2
+    num_iterations: 3
+    dropout: 0.1
+    temperature: 1.2
+    use_residual: true
+    use_layernorm: true
 
 lif_exc:
   num_groups: 1
@@ -105,7 +108,7 @@ classifier:
     tau: 2.0
     threshold: 1.0
     dropout: 0.0
-    readout: mean_membrane
+    readout: spike_count
 
 training:
   seed: 42

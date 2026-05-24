@@ -1,10 +1,10 @@
 experiment:
-  main_experiment_name: core_experiments
-  sub_experiment_name: full_routing
-  dataset_name: cifar10
+  main_experiment_name: snn_readout_study
+  sub_experiment_name: membrane_spike_hybrid
+  dataset_name: speech_commands
   model_name: cats
   routing_type: carson
-  run_name: run_002
+  run_name: run_001
   seed: 42
 
 data:
@@ -15,20 +15,22 @@ data:
   has_test: true
   num_workers: 0
   pin_memory: true
+  sample_fraction: 1
+  sample_seed: 42
 
 model:
   class_path: cats.model.CATSClassifier
   embedding_dim: 768
   hidden_dim: 256
-  num_classes: 10
+  num_classes: 35
   excitatory_ratio: 0.5
   num_groups: 2
   spiking:
     enabled: true
   inhibition:
     enabled: true
-  kwargs: 
-      use_shared_projection: true
+  kwargs:
+    use_shared_projection: true
 
 position:
   use: true
@@ -106,7 +108,7 @@ classifier:
     tau: 2.0
     threshold: 1.0
     dropout: 0.0
-    readout: mean_membrane
+    readout: membrane_spike_hybrid
 
 training:
   seed: 42
