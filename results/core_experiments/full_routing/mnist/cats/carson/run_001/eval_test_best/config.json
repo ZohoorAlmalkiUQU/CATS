@@ -1,5 +1,7 @@
 {
   "experiment": {
+    "main_experiment_name": "core_experiments",
+    "sub_experiment_name": "full_routing",
     "dataset_name": "mnist",
     "model_name": "cats",
     "routing_type": "carson",
@@ -28,7 +30,9 @@
     "inhibition": {
       "enabled": true
     },
-    "kwargs": {}
+    "kwargs": {
+      "use_shared_projection": true
+    }
   },
   "position": {
     "use": true,

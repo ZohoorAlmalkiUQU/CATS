@@ -15,7 +15,7 @@ def main() -> None:
 
     # python scripts/run_ablation.py
     experiments = [
-        "fixed_threshold",
+        # "fixed_threshold",
         # "fixed_tau",
         # "fixed_tau_fixed_threshold",
         # "no_adaptive",

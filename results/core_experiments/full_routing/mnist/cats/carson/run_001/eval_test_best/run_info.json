@@ -1,5 +1,5 @@
 {
-  "evaluated_at": "2026-05-25T01:12:44",
+  "evaluated_at": "2026-05-28T20:03:01",
   "checkpoint_path": "C:\\Users\\Zohoor Almalki\\Projects\\CATS\\checkpoints\\core_experiments\\full_routing\\mnist\\cats\\carson\\run_001\\best_run_001.pt",
   "checkpoint_type": "best",
   "split": "test",
@@ -15,9 +15,9 @@
   "num_classes": 10,
   "num_parameters": 2173713,
   "seed": 42,
-  "training_best_val_f1": 0.9669738973194496,
-  "training_best_epoch": 10,
-  "training_last_epoch": 10,
+  "training_best_val_f1": 0.980155010495463,
+  "training_best_epoch": 5,
+  "training_last_epoch": 5,
   "weights_loaded": "strict",
   "orig_routing_type": "carson",
   "output_dir": "results\\core_experiments\\full_routing\\mnist\\cats\\carson\\run_001\\eval_test_best"

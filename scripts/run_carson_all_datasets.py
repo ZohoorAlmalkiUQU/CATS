@@ -11,18 +11,23 @@ def main() -> None:
     python_executable = sys.executable
 
     # =========================
-    # 🔧 CONTROL VARIABLES
+    # CONTROL VARIABLES
     # =========================
     TARGET_EXPERIMENT = "core_experiments"
-    RUN_NAME = "run_002"
+    RUN_NAME = "run_001"
+    RESUME = True  # Set to True to resume from last checkpoint (if supported by config)
 
     # Run CARSON only on all datasets, one after another
     TARGET_DATASETS = [
-        "mnist",
-        "sst2",
-        "speech_commands",
+        # "mnist",
+        # "sst2",
+        # "speech_commands",
         "cifar10",
     ]
+
+    # Datasets to skip (for resuming after interruption).
+    # Add any dataset that already completed, e.g. ["speech_commands"]
+    SKIP_DATASETS: list[str] = []
 
     # base path:
     # configs/core_experiments/<dataset>/
@@ -74,6 +79,12 @@ def main() -> None:
     for idx, config_path in enumerate(config_paths, start=1):
         dataset_name = config_path.parent.name
 
+        if dataset_name in SKIP_DATASETS:
+            print("=" * 100)
+            print(f"[{idx}/{len(config_paths)}] SKIPPING (in SKIP_DATASETS): {dataset_name}")
+            print("=" * 100)
+            continue
+
         print("=" * 100)
         print(f"[{idx}/{len(config_paths)}] Running CARSON on dataset: {dataset_name}")
         print(f"Config: {config_path.name}")
@@ -85,6 +96,8 @@ def main() -> None:
             "--config",
             str(config_path),
         ]
+        if RESUME:
+            command.append("--resume")
 
         result = subprocess.run(command, cwd=project_root)
 

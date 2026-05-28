@@ -1,5 +1,5 @@
 {
-  "evaluated_at": "2026-05-25T01:11:36",
+  "evaluated_at": "2026-05-28T20:01:50",
   "checkpoint_path": "C:\\Users\\Zohoor Almalki\\Projects\\CATS\\checkpoints\\core_experiments\\full_routing\\cifar10\\cats\\carson\\run_001\\best_run_001.pt",
   "checkpoint_type": "best",
   "split": "test",
@@ -15,9 +15,9 @@
   "num_classes": 10,
   "num_parameters": 2173713,
   "seed": 42,
-  "training_best_val_f1": 0.6754906131944934,
-  "training_best_epoch": 5,
-  "training_last_epoch": 5,
+  "training_best_val_f1": 0.6753642244118828,
+  "training_best_epoch": 6,
+  "training_last_epoch": 6,
   "weights_loaded": "strict",
   "orig_routing_type": "carson",
   "output_dir": "results\\core_experiments\\full_routing\\cifar10\\cats\\carson\\run_001\\eval_test_best"

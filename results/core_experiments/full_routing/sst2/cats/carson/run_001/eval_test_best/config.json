@@ -1,8 +1,10 @@
 {
   "experiment": {
+    "main_experiment_name": "core_experiments",
+    "sub_experiment_name": "full_routing",
     "dataset_name": "sst2",
     "model_name": "cats",
-    "routing_type": "carson_v1",
+    "routing_type": "carson",
     "run_name": "run_001",
     "seed": 42
   },
@@ -28,7 +30,9 @@
     "inhibition": {
       "enabled": true
     },
-    "kwargs": {}
+    "kwargs": {
+      "use_shared_projection": true
+    }
   },
   "position": {
     "use": true,
@@ -127,7 +131,7 @@
     "grad_clip_norm": 1.0,
     "early_stopping_enabled": true,
     "early_stopping_patience": 3,
-    "early_stopping_min_delta": 0.001,
+    "early_stopping_min_delta": 0.0001,
     "lambda_balance": 0.2,
     "lambda_entropy": 0.001
   },
