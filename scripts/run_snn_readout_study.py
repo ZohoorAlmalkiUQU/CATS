@@ -33,12 +33,12 @@ from pathlib import Path
 
 
 READOUT_VARIANTS = [
-    # "mean_membrane",
+    # "mean_spikes",
+    "spike_count",
+    "mean_membrane",
     "last_membrane",
-    "mean_spikes",
-    # "spike_count",
-    # "membrane_spike_hybrid",
-    # "temporal_pool",
+    "membrane_spike_hybrid",
+    "temporal_pool",
 ]
 
 CONFIG_TEMPLATE = "train_carson_{dataset}_{readout}.yaml"
@@ -46,7 +46,7 @@ CONFIG_TEMPLATE = "train_carson_{dataset}_{readout}.yaml"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run SNN readout study experiments")
-    parser.add_argument("--resume", action="store_true", default=False)
+    parser.add_argument("--resume", action="store_true", default=True)
     parser.add_argument("--dataset", default="speech_commands")
     return parser.parse_args()
 

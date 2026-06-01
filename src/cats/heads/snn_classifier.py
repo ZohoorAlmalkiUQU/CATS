@@ -3,6 +3,22 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
+
+class SurrogateSpike(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, membrane, threshold):
+        ctx.save_for_backward(membrane - threshold)
+        return (membrane >= threshold).to(membrane.dtype)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        (delta,) = ctx.saved_tensors
+        surrogate = torch.clamp(1.0 - delta.abs(), min=0.0)
+        return grad_output * surrogate, None
+
+surrogate_spike = SurrogateSpike.apply
+
+
 _VALID_READOUTS = frozenset({
     "mean_membrane",
     "last_membrane",
@@ -117,7 +133,7 @@ class SNNClassifierHead(nn.Module):
                 current = current * valid_t
 
             membrane = alpha * membrane + current
-            spikes = (membrane >= self.threshold).to(dtype)
+            spikes = surrogate_spike(membrane, self.threshold)
             membrane = membrane * (1.0 - spikes)        # reset on spike
 
             membrane_trace.append(membrane)
