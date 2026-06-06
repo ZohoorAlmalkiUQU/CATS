@@ -34,7 +34,7 @@ from pathlib import Path
 
 READOUT_VARIANTS = [
     # "mean_spikes",
-    "spike_count",
+    # "spike_count",
     "mean_membrane",
     "last_membrane",
     "membrane_spike_hybrid",

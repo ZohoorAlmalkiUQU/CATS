@@ -66,6 +66,10 @@ data/processed/
 *.arrow
 *.parquet
 
+# exception: keep results files
+!results/
+!results/**
+
 # ==============================
 # IDE / Editor
 # ==============================
