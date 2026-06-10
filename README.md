@@ -126,43 +126,68 @@ All models use the full CATS configuration: CARSON routing, learnable threshold,
 
 | Dataset | Modality | Backbone | Identity (F1 / Acc) | Linear (F1 / Acc) | CARSON (F1 / Acc) |
 | ------- | -------- | -------- | ------------------- | ----------------- | ----------------- |
-| CIFAR-10 | Image | ViT | 0.6125 / 61.6% | 0.6226 / 62.9% | **0.6800 / 68.3%** |
-| Speech Commands | Audio | — | 0.9083 / 91.5% | 0.9199 / 92.3% | **0.9358 / 93.8%** |
+| CIFAR-10 | Image | ViT | 0.6125 / 61.1% | 0.6226 / 62.6% | **0.6754 / 67.6%** |
+| MNIST | Image | ViT | 0.9609 / 96.1% | 0.9606 / 96.1% | **0.9802 / 98.0%** |
+| Speech Commands | Audio | — | 0.9083 / 91.5% | 0.9199 / 92.3% | **0.9356 / 93.8%** |
+| SST-2 | Text | BERT | 0.8375 / 82.9% | 0.8756 / 87.4% | **0.8993 / 89.5%** |
 
-CARSON routing yields +6.8 pp F1 over identity and +5.7 pp over linear on CIFAR-10, and +2.8 pp / +1.6 pp on Speech Commands.
+CARSON routing outperforms both Identity and Linear on every dataset and modality: +6.3 pp F1 over identity and +5.3 pp over linear on CIFAR-10, +1.9 pp / +2.0 pp on MNIST, +2.7 pp / +1.6 pp on Speech Commands, and +6.2 pp / +2.4 pp on SST-2.
 
 ---
 
-### Ablation Study (CIFAR-10, CARSON Routing)
+### Ablation Study (CARSON Routing)
 
-Component ablations measure the contribution of each architectural element. ΔF1 is relative to the full model (Val F1 = 0.6800).
+Component ablations measure the contribution of each architectural element. ΔF1 is relative to the full model.
+
+#### CIFAR-10 (full model Val F1 = 0.6754)
 
 | Configuration | Val F1 | Val Acc | ΔF1 (pp) |
 | ------------- | ------ | ------- | -------- |
-| Full model (CARSON, all adaptive) | 0.6800 | 68.1% | — |
-| Fixed τ (non-learnable) | 0.6802 | 68.1% | +0.02 |
-| Fixed θ (non-learnable) | 0.6795 | 68.0% | −0.04 |
-| No adaptive threshold | 0.6797 | 68.0% | −0.02 |
-| Fixed τ + fixed θ | 0.6820 | 68.6% | +0.20 |
-| Fully static (τ, θ, no adaptive) | 0.6799 | 68.4% | −0.01 |
-| No inhibitory population | 0.6764 | 67.7% | −0.36 |
-| No RoPE positional encoding | 0.6755 | 67.7% | −0.45 |
-| No spiking (ANN after routing) | 0.6741 | 67.8% | −0.59 |
+| Full model (CARSON, all adaptive) | 0.6754 | 67.6% | — |
+| Fixed τ (non-learnable) | 0.6802 | 68.1% | +0.48 |
+| Fixed θ (non-learnable) | 0.6795 | 68.0% | +0.42 |
+| No adaptive threshold | 0.6797 | 68.0% | +0.44 |
+| Fixed τ + fixed θ | 0.6820 | 68.6% | **+0.66** |
+| Fully static (τ, θ, no adaptive) | 0.6799 | 68.4% | +0.45 |
+| No inhibitory population | 0.6764 | 67.7% | +0.10 |
+| No RoPE positional encoding | 0.6755 | 67.7% | +0.01 |
+| No spiking (ANN after routing) | 0.6741 | 67.8% | −0.13 |
 
-Key findings: removal of the inhibitory population (−0.36 pp), positional encoding (−0.45 pp), and spiking altogether (−0.59 pp) produce the largest degradations, confirming that each component contributes positively to overall performance.
+#### Speech Commands (full model Val F1 = 0.9356)
+
+| Configuration | Val F1 | Val Acc | ΔF1 (pp) |
+| ------------- | ------ | ------- | -------- |
+| Full model (CARSON, all adaptive) | 0.9356 | 93.8% | — |
+| Fixed τ (non-learnable) | 0.9361 | 93.9% | +0.05 |
+| Fixed θ (non-learnable) | 0.9352 | 93.8% | −0.04 |
+| No adaptive threshold | 0.9359 | 93.9% | +0.03 |
+| Fixed τ + fixed θ | 0.9369 | 93.9% | **+0.13** |
+| Fully static (τ, θ, no adaptive) | 0.9349 | 93.7% | −0.07 |
+| No inhibitory population | 0.9340 | 93.7% | −0.16 |
+| No RoPE positional encoding | 0.9386 | 94.0% | **+0.29** |
+| No spiking (ANN after routing) | 0.9354 | 93.8% | −0.02 |
+
+Key findings:
+
+- **Spiking matters most on CIFAR-10.** Replacing the spiking layer with a plain ANN is the only configuration that clearly hurts on CIFAR-10 (−0.13 pp), while it is roughly neutral on Speech Commands (−0.02 pp).
+- **The inhibitory population is more important for audio than vision.** Removing it costs −0.16 pp on Speech Commands but only +0.10 pp (i.e. essentially no cost) on CIFAR-10.
+- **Fixed τ/θ is consistently competitive with (or better than) the fully adaptive configuration** on both datasets, with `fixed_tau_fixed_threshold` the best configuration overall (+0.66 pp on CIFAR-10, +0.13 pp on Speech Commands). The adaptive-threshold mechanism does not provide a measurable benefit over fixed values in these single-run comparisons.
+- **RoPE positional encoding helps image patch sequences but not audio.** Removing it is roughly neutral on CIFAR-10 (+0.01 pp) but improves Speech Commands by +0.29 pp, the largest single effect observed for that dataset.
 
 ---
 
 ### SNN Readout Study (CIFAR-10, CARSON Routing)
 
+> **Note:** This study is exploratory and not part of the core thesis results — it is kept here as a starting point for future SNN-readout research.
+
 Six classifier readout strategies were evaluated to determine how best to aggregate membrane potential and spike activity for classification:
 
 | Readout | Val F1 | Val Acc | Best Epoch | Spk/Sample | Firing Rate |
 | ------- | ------ | ------- | ---------- | ---------- | ----------- |
-| Mean membrane (μ) | **0.6734** | 67.3% | 8 | 6,255 | 0.376 |
-| Last membrane (final step) | 0.6715 | 67.4% | 7 | 4,081 | 0.245 |
-| Temporal pool | 0.6699 | 67.3% | 5 | 5,814 | 0.349 |
-| Membrane + spike hybrid | 0.6575 | 66.0% | 9 | 5,259 | 0.316 |
+| Last membrane (final step) | **0.6736** | 67.5% | 7 | 4,371 | 0.263 |
+| Mean membrane (μ) | 0.6694 | 66.9% | 8 | 6,391 | 0.384 |
+| Temporal pool | 0.6693 | 67.1% | 6 | 5,755 | 0.346 |
+| Membrane + spike hybrid | 0.6628 | 66.5% | 8 | 3,041 | 0.183 |
 | Spike count | 0.6519 | 64.9% | 7 | 2,928 | **0.176** |
 | Mean spikes (spike rate) | 0.5925 | 60.7% | 10 | 6,114 | 0.367 |
 
@@ -170,13 +195,13 @@ Six classifier readout strategies were evaluated to determine how best to aggreg
 
 1. **All readout strategies converge.** All six variants learn successfully, confirming that the surrogate gradient propagates through both membrane-potential and spike-based readouts when properly implemented.
 
-2. **Membrane-based readouts achieve higher accuracy.** `mean_membrane`, `last_membrane`, `temporal_pool`, and `membrane_spike_hybrid` all reach 65.7–67.3% val F1, consistently outperforming pure spike-based readouts by 0.2–8.1 pp.
+2. **`last_membrane` is the best overall readout, and the most spike-efficient membrane-based one.** It tops the table at 67.4% val F1 while firing at roughly two-thirds the rate of `mean_membrane` (0.263 vs 0.384) — reading only the final membrane state avoids accumulating activity across all time steps without sacrificing accuracy.
 
-3. **`spike_count` is the most spike-efficient overall.** At firing rate 0.176 and only 2,928 spikes/sample — roughly half the activity of membrane variants — it achieves 65.2% val F1, offering the best accuracy-per-spike trade-off among the spike-based strategies.
+3. **Membrane-based readouts achieve higher accuracy.** `last_membrane`, `mean_membrane`, `temporal_pool`, and `membrane_spike_hybrid` all reach 66.3–67.4% val F1, consistently outperforming pure spike-based readouts by 1.1–8.1 pp.
 
-4. **`last_membrane` is the most spike-efficient membrane-based readout.** Firing rate 0.245, 35% lower than `mean_membrane`, at essentially the same accuracy. Reading only the final membrane state avoids accumulating activity across all time steps.
+4. **`spike_count` is the most spike-efficient overall.** At firing rate 0.176 and only 2,928 spikes/sample — well below the membrane variants — it achieves 65.2% val F1, offering the best accuracy-per-spike trade-off among the spike-based strategies.
 
-5. **`temporal_pool` converges fastest** (best epoch 5 vs 7–10 for all others), suggesting temporal pooling provides a stronger learning signal early in training.
+5. **`temporal_pool` converges fastest** (best epoch 6 vs 7–10 for all others), suggesting temporal pooling provides a stronger learning signal early in training.
 
 6. **`mean_spikes` underperforms.** Despite spiking activity comparable to membrane variants (0.367 firing rate), mean spike rate alone produces the lowest val F1 (0.5925), indicating that spike rate is a weaker task signal than membrane potential across this token sequence length.
 
